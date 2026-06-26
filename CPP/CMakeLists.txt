@@ -291,6 +291,7 @@ if(CLIPPER2_TESTS)
     Tests/TestRectClip.cpp
     Tests/TestRounding.cpp
     Tests/TestSimplifyPath.cpp
+    Tests/TestStripeIndex.cpp
     Tests/TestTrimCollinear.cpp
     Tests/TestWindows.cpp
   )
@@ -335,6 +336,8 @@ if(CLIPPER2_TESTS)
   file(COPY ../Tests/Lines.txt DESTINATION ${CMAKE_BINARY_DIR} FILE_PERMISSIONS OWNER_READ GROUP_READ WORLD_READ )
   file(COPY ../Tests/Polygons.txt DESTINATION ${CMAKE_BINARY_DIR} FILE_PERMISSIONS OWNER_READ GROUP_READ WORLD_READ )
   file(COPY ../Tests/Offsets.txt DESTINATION ${CMAKE_BINARY_DIR} FILE_PERMISSIONS OWNER_READ GROUP_READ WORLD_READ )
+  file(COPY ../Tests/clipper_subtract.txt DESTINATION ${CMAKE_BINARY_DIR} FILE_PERMISSIONS OWNER_READ GROUP_READ WORLD_READ )
+  file(COPY ../Tests/clipper_inflate.txt DESTINATION ${CMAKE_BINARY_DIR} FILE_PERMISSIONS OWNER_READ GROUP_READ WORLD_READ )
 endif()
 
 if(USE_EXTERNAL_GBENCHMARK)
