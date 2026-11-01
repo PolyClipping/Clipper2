@@ -170,7 +170,6 @@
     <ClInclude Include="..\..\CPP\Clipper2Lib\include\clipper2\clipper.h" />
     <ClInclude Include="..\..\CPP\Clipper2Lib\include\clipper2\clipper.offset.h" />
     <ClInclude Include="..\..\CPP\Clipper2Lib\include\clipper2\clipper.rectclip.h" />
-    <ClInclude Include="..\..\CPP\Clipper2Lib\include\clipper2\clipper.triangulation.h" />
     <ClInclude Include="framework.h" />
     <ClInclude Include="pch.h" />
   </ItemGroup>
@@ -178,7 +177,6 @@
     <ClCompile Include="..\..\CPP\Clipper2Lib\src\clipper.engine.cpp" />
     <ClCompile Include="..\..\CPP\Clipper2Lib\src\clipper.offset.cpp" />
     <ClCompile Include="..\..\CPP\Clipper2Lib\src\clipper.rectclip.cpp" />
-    <ClCompile Include="..\..\CPP\Clipper2Lib\src\clipper.triangulation.cpp" />
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="pch.cpp" />
   </ItemGroup>

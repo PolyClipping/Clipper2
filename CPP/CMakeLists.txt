@@ -48,14 +48,12 @@ set(CLIPPER2_INC
   ${CLIPPER2_INC_FOLDER}/clipper.minkowski.h
   ${CLIPPER2_INC_FOLDER}/clipper.offset.h
   ${CLIPPER2_INC_FOLDER}/clipper.rectclip.h
-  ${CLIPPER2_INC_FOLDER}/clipper.triangulation.h
 )
 
 set(CLIPPER2_SRC
   Clipper2Lib/src/clipper.engine.cpp
   Clipper2Lib/src/clipper.offset.cpp
   Clipper2Lib/src/clipper.rectclip.cpp
-  Clipper2Lib/src/clipper.triangulation.cpp
 )
 
 set(CLIPPER2_LIBS "") # one or both of Clipper2/Clipper2Z
@@ -204,7 +202,6 @@ if(CLIPPER2_EXAMPLES)
       RectClipping
       SimpleClipping
       VariableOffset
-      Triangulation
     )
 
     foreach(ex ${EXAMPLES})
@@ -213,7 +210,6 @@ if(CLIPPER2_EXAMPLES)
     endforeach()
 
     file(COPY Examples/Inflate/rabbit.svg DESTINATION ${CMAKE_BINARY_DIR} FILE_PERMISSIONS OWNER_READ GROUP_READ WORLD_READ )
-    file(COPY Examples/Triangulation/TriSamples DESTINATION ${CMAKE_BINARY_DIR} FILE_PERMISSIONS OWNER_READ GROUP_READ WORLD_READ )
 
     list(APPEND ALL_EXAMPLES ${EXAMPLES})
   endif()

@@ -34,11 +34,6 @@ namespace Clipper2Lib {
 
 
 
-  inline int32_t RandomColor()
-  {
-    return rand() | (rand() << 15) | 0xFF000000;
-  }
-
   inline bool FileExists(const std::string& filename)
   {
     //return std::filesystem::exists(filename); // <filesystem> not available in Ubuntu (#990)
@@ -114,28 +109,11 @@ namespace Clipper2Lib {
     svg.AddPaths(path, false, fillrule, solution_brush_clr, 0x80666666, 1.0, show_coords);
   }
 
-  // SvgAddRCSolution - random color for each individual polygon (eg when triangulating) 
-  inline void SvgAddRCSolution(SvgWriter& svg, const PathsD& paths, FillRule fillrule, bool show_coords)
-  {
-    for (const PathD& path : paths)
-      svg.AddPath(path, false, fillrule, RandomColor(), 0xFF999999, 1.0, show_coords);
-  }
-
 
   inline void SvgAddSolution(SvgWriter& svg, const Paths64 &path, FillRule fillrule, bool show_coords)
   {
     svg.AddPaths(TransformPaths<double, int64_t>(path),
       false, fillrule, solution_brush_clr, 0xFF003300, 1.0, show_coords);
-  }
-
-  // SvgAddRCSolution - random color for each individual polygon (eg when triangulating) 
-  inline void SvgAddRCSolution(SvgWriter& svg, const Paths64& paths, FillRule fillrule, bool show_coords)
-  {
-    for (const Path64& path : paths)
-    {
-      svg.AddPath(TransformPath<double, int64_t>(path), 
-        false, fillrule, RandomColor(), 0xFF999999, 1.0, show_coords);
-    }
   }
 
   inline void SvgAddOpenSolution(SvgWriter& svg, const PathsD& path, FillRule fillrule,
