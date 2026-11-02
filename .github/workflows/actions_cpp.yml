@@ -39,8 +39,8 @@ jobs:
       run: |
         cd CPP/build
         env CTEST_OUTPUT_ON_FAILURE=1 make test
-  ubuntu-latest-gcc-11:
-    runs-on: 'ubuntu-latest'
+  ubuntu-24.04-gcc-11:
+    runs-on: 'ubuntu-24.04'
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-node@v4
@@ -80,8 +80,8 @@ jobs:
       run: |
         cd CPP/build
         env CTEST_OUTPUT_ON_FAILURE=1 make test
-  ubuntu-latest-clang-17:
-    runs-on: 'ubuntu-latest'
+  ubuntu-24.04-clang-17:
+    runs-on: 'ubuntu-24.04'
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-node@v4
@@ -89,9 +89,8 @@ jobs:
         node-version: '16'
     - name: Install clang 17
       run: |
-        wget https://apt.llvm.org/llvm.sh
-        chmod +x llvm.sh
-        sudo ./llvm.sh 17
+        sudo apt update
+        sudo apt install clang-17
     - name: Build
       run: |
         export CC=/usr/bin/clang-17
