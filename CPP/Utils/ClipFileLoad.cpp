@@ -3,7 +3,6 @@
 //------------------------------------------------------------------------------
 
 #include "ClipFileLoad.h"
-#include <sstream>
 
 using namespace std;
 using namespace Clipper2Lib;
@@ -42,37 +41,34 @@ bool GetPath(const string& line, Paths64& paths)
   return true;
 }
 
-void GetPaths(ifstream& source, Paths64& paths)
-{
-  while (true)
-  {
-    string line;
-    stringstream::pos_type last_read_line_pos = source.tellg();
-    if (getline(source, line) && GetPath(line, paths))
-      continue;
-    last_read_line_pos -= 1; // workaround for LF vs LFCR (#764)
-    source.seekg(last_read_line_pos, ios_base::beg);
-    break;
-  }
-}
-
 bool LoadTestNum(ifstream &source, int test_num,
   Paths64 &subj, Paths64 &subj_open, Paths64 &clip,
   int64_t& area, int64_t& count, ClipType &ct, FillRule &fr)
 {
   string line;
+  Paths64* paths = nullptr;
   area = 0; count = 0;
+
   if (test_num <= 0) test_num = 1;
+
+  // only ever seek to the start, since text mode positions are unreliable for LF files on Windows
+  source.clear();
   source.seekg(0, ios_base::beg);
   subj.clear(); subj_open.clear(); clip.clear();
 
   while (getline(source, line))
   {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+
     if (test_num)
     {
       if (line.find("CAPTION:") != string::npos) --test_num;
       continue;
     }
+
+    if (paths && GetPath(line, *paths)) continue;
+
+    paths = nullptr;
 
     if (line.find("CAPTION:") != string::npos) break; // ie don't go beyond current test
 
@@ -105,17 +101,11 @@ bool LoadTestNum(ifstream &source, int test_num,
       GetInt(s_it, s_end, count);
     }
     else if (line.find("SUBJECTS_OPEN") != string::npos)
-    {
-      GetPaths(source, subj_open);
-    }
+      paths = &subj_open;
     else if (line.find("SUBJECTS") != string::npos)
-    {
-      GetPaths(source, subj);
-    }
+      paths = &subj;
     else if (line.find("CLIPS") != string::npos)
-    {
-      GetPaths(source, clip);
-    }
+      paths = &clip;
   }
   return !test_num;
 }
