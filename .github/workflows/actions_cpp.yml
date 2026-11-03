@@ -22,6 +22,58 @@ jobs:
       run: |
         cd CPP/build
         ctest . -C RelWithDebInfo --output-on-failure
+  windows-11-arm:
+    runs-on: 'windows-11-arm'
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build
+      run: |
+        mkdir CPP/build
+        cd CPP/build
+        cmake .. -A ARM64 -DCLIPPER2_TESTS=ON -DCLIPPER2_UTILS:BOOL=ON -DCLIPPER2_EXAMPLES:BOOL=ON
+        cmake --build . --config RelWithDebInfo --parallel
+    - name: Run tests
+      run: |
+        cd CPP/build
+        ctest . -C RelWithDebInfo --output-on-failure
+  windows-dll:
+    name: windows-dll-${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each platform builds on the runner image that has the v143 toolset for it.
+        include:
+        - { platform: x86, runner: windows-latest, msbuild: x64, outdir: '', suffix: '32', machine: '0x14C' }
+        - { platform: x64, runner: windows-latest, msbuild: x64, outdir: 'x64\', suffix: '64', machine: '0x8664' }
+        - { platform: ARM64, runner: windows-11-arm, msbuild: arm64, outdir: 'ARM64\', suffix: 'arm64', machine: '0xAA64' }
+    steps:
+    - uses: actions/checkout@v4
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v2
+      with:
+        msbuild-architecture: ${{ matrix.msbuild }}
+    - name: Build
+      working-directory: DLL/CPP_DLL
+      run: |
+        foreach ($config in 'Debug', 'Release') {
+          foreach ($solution in 'Clipper2_DLL.sln', 'Clipper2_Z_DLL.sln') {
+            msbuild $solution -m -nologo "-p:Configuration=$config" "-p:Platform=${{ matrix.platform }}"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+        }
+    - name: Check DLL names and machine types
+      working-directory: DLL/CPP_DLL
+      run: |
+        foreach ($config in 'Debug', 'Release') {
+          foreach ($name in 'Clipper2', 'Clipper2_Z') {
+            $dll = "${{ matrix.outdir }}$config\${name}_${{ matrix.suffix }}.dll"
+            $bytes = [IO.File]::ReadAllBytes((Resolve-Path $dll))
+            $machine = [BitConverter]::ToUInt16($bytes, [BitConverter]::ToInt32($bytes, 0x3C) + 4)
+            if ($machine -ne ${{ matrix.machine }}) { throw "$dll has machine type 0x$($machine.ToString('X'))" }
+            Write-Output "$dll OK"
+          }
+        }
   ubuntu-latest-gcc-default:
     runs-on: 'ubuntu-latest'
     steps:

@@ -1,1 +1,11 @@
 .*
+!.github/
+!.gitignore
+
+# Visual Studio output from the DLL solutions
+/DLL/CPP_DLL/Debug/
+/DLL/CPP_DLL/Release/
+/DLL/CPP_DLL/Win32/
+/DLL/CPP_DLL/x64/
+/DLL/CPP_DLL/ARM64/
+*.vcxproj.user

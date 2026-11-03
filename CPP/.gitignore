@@ -1,1 +1,3 @@
 build*
+# Cloned by CMake when CLIPPER2_TESTS is on
+Tests/googletest/
