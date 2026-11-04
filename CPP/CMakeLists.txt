@@ -342,7 +342,12 @@ foreach(lib ${CLIPPER2_LIBS})
   else()
     set(PCFILE_LIB_SUFFIX "")
   endif()
-  configure_file(Clipper2.pc.cmakein "${pc}" @ONLY)
+
+  # The definitions are read from the target, so pkg-config users compile the headers the way the library was built
+  set(pc_defs "$<FILTER:$<TARGET_PROPERTY:${lib},INTERFACE_COMPILE_DEFINITIONS>,INCLUDE,.>")
+  set(PCFILE_DEFINITIONS "$<$<BOOL:${pc_defs}>: -D$<JOIN:${pc_defs}, -D>>")
+  configure_file(Clipper2.pc.cmakein "${pc}.in" @ONLY)
+  file(GENERATE OUTPUT "${pc}" INPUT "${pc}.in")
 endforeach()
 
 install(TARGETS ${CLIPPER2_LIBS}
