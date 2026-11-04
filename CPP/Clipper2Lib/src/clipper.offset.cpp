@@ -645,10 +645,10 @@ void ClipperOffset::Execute(double delta, Paths64& paths64)
 void ClipperOffset::Execute(double delta, PolyTree64& polytree)
 {
 	polytree.Clear();
+	Paths64 paths;
 	solution_tree = &polytree;
-	solution = new Paths64();
+	solution = &paths;
 	ExecuteInternal(delta);
-	delete solution;
 	solution = nullptr;
 }
 

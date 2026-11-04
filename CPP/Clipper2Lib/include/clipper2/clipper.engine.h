@@ -280,6 +280,12 @@ namespace Clipper2Lib {
 		void SetZ(const Active& e1, const Active& e2, Point64& pt);
 #endif
 		void CleanUp();  // unlike Clear, CleanUp preserves added paths
+		//Calls CleanUp when an Execute call returns or throws, so a clipper
+		//is never left holding the state of an unfinished operation.
+		struct CleanUpOnExit {
+			ClipperBase& clipper;
+			~CleanUpOnExit() { clipper.CleanUp(); }
+		};
 		void AddPath(const Path64& path, PathType polytype, bool is_open);
 		void AddPaths(const Paths64& paths, PathType polytype, bool is_open);
 	public:
@@ -497,11 +503,13 @@ namespace Clipper2Lib {
 		bool Execute(ClipType clip_type, FillRule fill_rule,
 			Paths64& closed_paths, Paths64& open_paths)
 		{
+			CleanUpOnExit clean_up{ *this };
 			closed_paths.clear();
 			open_paths.clear();
+
 			if (ExecuteInternal(clip_type, fill_rule, false))
 					BuildPaths64(closed_paths, &open_paths);
-			CleanUp();
+
 			return succeeded_;
 		}
 
@@ -514,13 +522,15 @@ namespace Clipper2Lib {
 		bool Execute(ClipType clip_type,
 			FillRule fill_rule, PolyTree64& polytree, Paths64& open_paths)
 		{
+			CleanUpOnExit clean_up{ *this };
+
 			if (ExecuteInternal(clip_type, fill_rule, true))
 			{
 				open_paths.clear();
 				polytree.Clear();
 				BuildTree64(polytree, open_paths);
 			}
-			CleanUp();
+
 			return succeeded_;
 		}
 	};
@@ -602,14 +612,16 @@ namespace Clipper2Lib {
 		bool Execute(ClipType clip_type,
 			FillRule fill_rule, PathsD& closed_paths, PathsD& open_paths)
 		{
+			CleanUpOnExit clean_up{ *this };
 #ifdef USINGZ
 			CheckCallback();
 #endif
+
 			if (ExecuteInternal(clip_type, fill_rule, false))
 			{
 				BuildPathsD(closed_paths, &open_paths);
 			}
-			CleanUp();
+
 			return succeeded_;
 		}
 
@@ -622,9 +634,11 @@ namespace Clipper2Lib {
 		bool Execute(ClipType clip_type,
 			FillRule fill_rule, PolyTreeD& polytree, PathsD& open_paths)
 		{
+			CleanUpOnExit clean_up{ *this };
 #ifdef USINGZ
 			CheckCallback();
 #endif
+
 			if (ExecuteInternal(clip_type, fill_rule, true))
 			{
 				polytree.Clear();
@@ -632,7 +646,7 @@ namespace Clipper2Lib {
 				open_paths.clear();
 				BuildTreeD(polytree, open_paths);
 			}
-			CleanUp();
+
 			return succeeded_;
 		}
 

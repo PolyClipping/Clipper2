@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "clipper2/clipper.h"
 #include "ClipFileLoad.h"
+#include <stdexcept>
 inline Clipper2Lib::PathD MakeRandomPath(int width, int height, unsigned vertCnt)
 {
   Clipper2Lib::PathD result;
@@ -123,3 +124,37 @@ TEST(Clipper2Tests, TestCollinearOnMacOs) //#777
   EXPECT_EQ(solution[0].size(), 3);
   EXPECT_EQ(IsPositive(subject[0]), IsPositive(solution[0]));
 }
+
+#ifdef USINGZ
+TEST(Clipper2Tests, TestExecuteAfterZCallbackThrows)
+{
+  // a clipper must be left clean when an exception escapes Execute
+  Clipper2Lib::Paths64 subject = {
+    Clipper2Lib::MakePath({ 0,0, 100,0, 100,100, 0,100 }),
+    Clipper2Lib::MakePath({ 50,50, 150,50, 150,150, 50,150 }) };
+  Clipper2Lib::Paths64 clip = { Clipper2Lib::MakePath({ 20,-10, 80,-10, 80,200, 20,200 }) };
+
+  Clipper2Lib::Clipper64 fresh;
+  fresh.AddSubject(subject);
+  fresh.AddClip(clip);
+  Clipper2Lib::Paths64 expected;
+  fresh.Execute(Clipper2Lib::ClipType::Xor, Clipper2Lib::FillRule::NonZero, expected);
+
+  Clipper2Lib::Clipper64 clipper;
+  clipper.AddSubject(subject);
+  clipper.AddClip(clip);
+  int calls = 0;
+  clipper.SetZCallback([&calls](const Clipper2Lib::Point64&, const Clipper2Lib::Point64&,
+    const Clipper2Lib::Point64&, const Clipper2Lib::Point64&, Clipper2Lib::Point64&)
+    {
+      if (++calls == 3) throw std::runtime_error("Z callback");
+    });
+  Clipper2Lib::Paths64 solution;
+  EXPECT_THROW(clipper.Execute(Clipper2Lib::ClipType::Xor, Clipper2Lib::FillRule::NonZero, solution),
+    std::runtime_error);
+
+  clipper.SetZCallback(nullptr);
+  clipper.Execute(Clipper2Lib::ClipType::Xor, Clipper2Lib::FillRule::NonZero, solution);
+  EXPECT_EQ(solution, expected);
+}
+#endif
