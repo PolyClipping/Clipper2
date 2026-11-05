@@ -201,3 +201,32 @@ TEST(Clipper2Tests, ExportHeaderTreeD)
     pp = pp->Child(0);
   }
 }
+
+TEST(Clipper2Tests, ExportHeaderInflateReverseSolution)
+{
+  const uint8_t miter = static_cast<uint8_t>(JoinType::Miter);
+  const uint8_t polygon = static_cast<uint8_t>(EndType::Polygon);
+  CPaths64 c_square = CreateCPathsFromPathsT(Paths64{ MakePath({ 0,0, 100,0, 100,100, 0,100 }) });
+  CPathsD c_squareD = CreateCPathsDFromPathsD(PathsD{ MakePathD({ 0,0, 100,0, 100,100, 0,100 }) });
+
+  for (bool reverse : { false, true })
+  {
+    const double expected = reverse ? -14400 : 14400;
+    // a CPaths array holds its first path two values in
+    CPaths64 sol_paths64 = InflatePaths64(c_square, 10, miter, polygon, 2.0, 0.0, reverse);
+    CPaths64 sol_path64 = InflatePath64(c_square + 2, 10, miter, polygon, 2.0, 0.0, reverse);
+    CPathsD sol_pathsD = InflatePathsD(c_squareD, 10, miter, polygon, 2, 2.0, 0.0, reverse);
+    CPathsD sol_pathD = InflatePathD(c_squareD + 2, 10, miter, polygon, 2, 2.0, 0.0, reverse);
+    EXPECT_EQ(Area(ConvertCPathsToPathsT(sol_paths64)), expected);
+    EXPECT_EQ(Area(ConvertCPathsToPathsT(sol_path64)), expected);
+    EXPECT_EQ(Area(ConvertCPathsToPathsT(sol_pathsD)), expected);
+    EXPECT_EQ(Area(ConvertCPathsToPathsT(sol_pathD)), expected);
+    DisposeArray64(sol_paths64);
+    DisposeArray64(sol_path64);
+    DisposeArrayD(sol_pathsD);
+    DisposeArrayD(sol_pathD);
+  }
+
+  delete[] c_square;
+  delete[] c_squareD;
+}

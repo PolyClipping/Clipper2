@@ -691,7 +691,7 @@ EXTERN_DLL_EXPORT CPaths64 InflatePaths64(const CPaths64 paths,
   Paths64 pp;
   pp = ConvertCPathsToPathsT(paths);
   ClipperOffset clip_offset( miter_limit,
-    arc_tolerance, reverse_solution);
+    arc_tolerance, false, reverse_solution);
   clip_offset.AddPaths(pp, JoinType(jointype), EndType(endtype));
   Paths64 result;
   clip_offset.Execute(delta, result);
@@ -706,7 +706,7 @@ EXTERN_DLL_EXPORT CPathsD InflatePathsD(const CPathsD paths,
   if (precision < -8 || precision > 8 || !paths) return nullptr;
 
   const double scale = std::pow(10, precision);
-  ClipperOffset clip_offset(miter_limit, arc_tolerance, reverse_solution);
+  ClipperOffset clip_offset(miter_limit, arc_tolerance, false, reverse_solution);
   Paths64 pp = ConvertCPathsDToPaths64(paths, scale);
   clip_offset.AddPaths(pp, JoinType(jointype), EndType(endtype));
   Paths64 result;
@@ -722,7 +722,7 @@ EXTERN_DLL_EXPORT CPaths64 InflatePath64(const CPath64 path,
     Path64 pp;
     pp = ConvertCPathToPathT(path);
     ClipperOffset clip_offset(miter_limit,
-        arc_tolerance, reverse_solution);
+        arc_tolerance, false, reverse_solution);
     clip_offset.AddPath(pp, JoinType(jointype), EndType(endtype));
     Paths64 result;
     clip_offset.Execute(delta, result);
@@ -737,7 +737,7 @@ EXTERN_DLL_EXPORT CPathsD InflatePathD(const CPathD path,
     if (precision < -8 || precision > 8 || !path) return nullptr;
 
     const double scale = std::pow(10, precision);
-    ClipperOffset clip_offset(miter_limit, arc_tolerance, reverse_solution);
+    ClipperOffset clip_offset(miter_limit, arc_tolerance, false, reverse_solution);
     Path64 pp = ConvertCPathDToPath64WithScale(path, scale);
     clip_offset.AddPath(pp, JoinType(jointype), EndType(endtype));
     Paths64 result;
