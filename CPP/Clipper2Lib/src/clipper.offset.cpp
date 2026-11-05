@@ -145,6 +145,10 @@ ClipperOffset::Group::Group(const Paths64& _paths, JoinType _join_type, EndType 
 	for (Path64& p: paths_in)
 	  StripDuplicates(p, is_joined);
 
+	// the offset code assumes every path has at least one vertex
+	paths_in.erase(std::remove_if(paths_in.begin(), paths_in.end(),
+		[](const Path64& p) { return p.empty(); }), paths_in.end());
+
 	if (end_type == EndType::Polygon)
 	{
 		bool is_neg_area;
@@ -557,15 +561,12 @@ size_t ClipperOffset::CalcSolutionCapacity()
 
 bool ClipperOffset::CheckReverseOrientation()
 {
-	// nb: this assumes there's consistency in orientation between groups
-	bool is_reversed_orientation = false;
+	// nb: this assumes there's consistency in orientation between groups,
+	// and groups without a valid closed path have no orientation to offer
 	for (const Group& g : groups_)
-		if (g.end_type == EndType::Polygon)
-		{
-			is_reversed_orientation = g.is_reversed;
-			break;
-		}
-	return is_reversed_orientation;
+		if (g.lowest_path_idx.has_value()) return g.is_reversed;
+
+	return false;
 }
 
 void ClipperOffset::ExecuteInternal(double delta)

@@ -770,3 +770,28 @@ TEST(Clipper2Tests, TestOffsetsSinglePointDeltaCallbackNormals)
   EXPECT_TRUE(normals_match_path);
   EXPECT_EQ(solution.size(), 3);
 }
+
+TEST(Clipper2Tests, TestOffsetsEmptyOpenPath)
+{
+  const Paths64 line = { {{0, 0}, {10, 0}} };
+  const Paths64 line_and_empty = { {}, {{0, 0}, {10, 0}} };
+
+  for (EndType et : { EndType::Joined, EndType::Butt, EndType::Square, EndType::Round })
+  {
+    EXPECT_EQ(InflatePaths(line_and_empty, 10, JoinType::Square, et),
+      InflatePaths(line, 10, JoinType::Square, et));
+  }
+}
+
+TEST(Clipper2Tests, TestOffsetsEmptyGroupOrientation)
+{
+  // an empty group has no orientation and must not decide the orientation of the solution
+  const Path64 clockwise_square = { {0, 0}, {0, 100}, {100, 100}, {100, 0} };
+
+  ClipperOffset offset;
+  offset.AddPath(Path64(), JoinType::Miter, EndType::Polygon);
+  offset.AddPath(clockwise_square, JoinType::Miter, EndType::Polygon);
+  Paths64 solution;
+  offset.Execute(10, solution);
+  EXPECT_EQ(Area(solution), -14400);
+}
