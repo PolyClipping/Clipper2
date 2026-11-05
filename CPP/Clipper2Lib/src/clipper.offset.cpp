@@ -187,6 +187,24 @@ void ClipperOffset::BuildNormals(const Path64& path)
     norms.emplace_back(GetUnitNormal(*path_stop_iter, *(path.cbegin())));
 }
 
+void ClipperOffset::SetArcSteps(double delta)
+{
+	// calculate the number of steps required to approximate a circle
+	// (see https://github.com/PolyClipping/Clipper2/wiki/Trigonometry)
+	// arcTol - when arc_tolerance_ is undefined (0) then curve imprecision
+	// will be relative to the size of the offset (delta). Obviously very
+	//large offsets will almost always require much less precision.
+	double abs_delta = std::fabs(delta);
+	double arcTol = (arc_tolerance_ > floating_point_tolerance) ?
+		std::min(abs_delta, arc_tolerance_) : abs_delta * arc_const;
+
+	double steps_per_360 = std::min(PI / std::acos(1 - arcTol / abs_delta), abs_delta * PI);
+	step_sin_ = std::sin(2 * PI / steps_per_360);
+	step_cos_ = std::cos(2 * PI / steps_per_360);
+	if (delta < 0.0) step_sin_ = -step_sin_;
+	steps_per_rad_ = steps_per_360 / (2 * PI);
+}
+
 void ClipperOffset::DoBevel(const Path64& path, size_t j, size_t k)
 {
 	PointD pt1, pt2;
@@ -272,18 +290,9 @@ void ClipperOffset::DoMiter(const Path64& path, size_t j, size_t k, double cos_a
 
 void ClipperOffset::DoRound(const Path64& path, size_t j, size_t k, double angle)
 {
-	if (deltaCallback64_) {
-		// when deltaCallback64_ is assigned, group_delta_ won't be constant,
-		// so we'll need to do the following calculations for *every* vertex.
-		double abs_delta = std::fabs(group_delta_);
-		double arcTol = (arc_tolerance_ > floating_point_tolerance ?
-			std::min(abs_delta, arc_tolerance_) : abs_delta * arc_const);
-		double steps_per_360 = std::min(PI / std::acos(1 - arcTol / abs_delta), abs_delta * PI);
-		step_sin_ = std::sin(2 * PI / steps_per_360);
-		step_cos_ = std::cos(2 * PI / steps_per_360);
-		if (group_delta_ < 0.0) step_sin_ = -step_sin_;
-		steps_per_rad_ = steps_per_360 / (2 * PI);
-	}
+	// when deltaCallback64_ is assigned, group_delta_ won't be constant,
+	// so the arc steps need recalculating for *every* vertex.
+	if (deltaCallback64_) SetArcSteps(group_delta_);
 
 	Point64 pt = path[j];
 	PointD offsetVec = PointD(norms[k].x * group_delta_, norms[k].y * group_delta_);
@@ -392,7 +401,7 @@ void ClipperOffset::OffsetOpenJoined(Group& group, const Path64& path)
 	OffsetPolygon(group, reverse_path);
 }
 
-void ClipperOffset::OffsetOpenPath(Group& group, const Path64& path)
+void ClipperOffset::OffsetOpenPath(Group& group, const Path64& path, EndType end_type)
 {
 	// do the line start cap
 	if (deltaCallback64_) group_delta_ = deltaCallback64_(path, norms, 0, 0);
@@ -401,7 +410,7 @@ void ClipperOffset::OffsetOpenPath(Group& group, const Path64& path)
         path_out.emplace_back(path[0]);
 	else
 	{
-		switch (end_type_)
+		switch (end_type)
 		{
 		case EndType::Butt:
 			DoBevel(path, 0, 0);
@@ -433,7 +442,7 @@ void ClipperOffset::OffsetOpenPath(Group& group, const Path64& path)
         path_out.emplace_back(path[highI]);
 	else
 	{
-		switch (end_type_)
+		switch (end_type)
 		{
 		case EndType::Butt:
 			DoBevel(path, highI, highI);
@@ -458,32 +467,17 @@ void ClipperOffset::DoGroupOffset(Group& group)
 	{
 		// a straight path (2 points) can now also be 'polygon' offset
 		// where the ends will be treated as (180 deg.) joins
-        if (!group.lowest_path_idx.has_value()) delta_ = std::abs(delta_);
-		group_delta_ = (group.is_reversed) ? -delta_ : delta_;
+		double delta = group.lowest_path_idx.has_value() ? delta_ : std::abs(delta_);
+		group_delta_ = (group.is_reversed) ? -delta : delta;
 	}
 	else
 		group_delta_ = std::abs(delta_);// *0.5;
 
 	double abs_delta = std::fabs(group_delta_);
 	join_type_	= group.join_type;
-	end_type_ = group.end_type;
 
 	if (group.join_type == JoinType::Round || group.end_type == EndType::Round)
-	{
-		// calculate the number of steps required to approximate a circle
-		// (see https://github.com/PolyClipping/Clipper2/wiki/Trigonometry)
-		// arcTol - when arc_tolerance_ is undefined (0) then curve imprecision
-		// will be relative to the size of the offset (delta). Obviously very
-		//large offsets will almost always require much less precision.
-		double arcTol = (arc_tolerance_ > floating_point_tolerance) ?
-			std::min(abs_delta, arc_tolerance_) : abs_delta * arc_const;
-
-		double steps_per_360 = std::min(PI / std::acos(1 - arcTol / abs_delta), abs_delta * PI);
-		step_sin_ = std::sin(2 * PI / steps_per_360);
-		step_cos_ = std::cos(2 * PI / steps_per_360);
-		if (group_delta_ < 0.0) step_sin_ = -step_sin_;
-		steps_per_rad_ = steps_per_360 / (2 * PI);
-	}
+		SetArcSteps(group_delta_);
 
 	//double min_area = PI * Sqr(group_delta_);
 	Paths64::const_iterator path_in_it = group.paths_in.cbegin();
@@ -491,6 +485,7 @@ void ClipperOffset::DoGroupOffset(Group& group)
 	{
 		Path64::size_type pathLen = path_in_it->size();
 		path_out.clear();
+		BuildNormals(*path_in_it);
 
 		if (pathLen == 1) // single point
 		{
@@ -506,6 +501,9 @@ void ClipperOffset::DoGroupOffset(Group& group)
 			//single vertex so build a circle or square ...
 			if (group.join_type == JoinType::Round)
 			{
+				// DoRound may have left the arc steps of another path's delta
+				if (deltaCallback64_) SetArcSteps(group_delta_);
+
 				double radius = abs_delta;
                 size_t steps = steps_per_rad_ > 0 ? static_cast<size_t>(std::ceil(steps_per_rad_ * 2 * PI)) : 0; //#617
 				path_out = Ellipse(pt, radius, radius, steps);
@@ -527,15 +525,14 @@ void ClipperOffset::DoGroupOffset(Group& group)
 			continue;
 		} // end of offsetting a single point
 
-		if ((pathLen == 2) && (group.end_type == EndType::Joined))
-			end_type_ = (group.join_type == JoinType::Round) ?
-			  EndType::Round :
-			  EndType::Square;
+		EndType end_type = group.end_type;
 
-		BuildNormals(*path_in_it);
-		if (end_type_ == EndType::Polygon) OffsetPolygon(group, *path_in_it);
-		else if (end_type_ == EndType::Joined) OffsetOpenJoined(group, *path_in_it);
-		else OffsetOpenPath(group, *path_in_it);
+		if ((pathLen == 2) && (end_type == EndType::Joined))
+			end_type = (group.join_type == JoinType::Round) ? EndType::Round : EndType::Square;
+
+		if (end_type == EndType::Polygon) OffsetPolygon(group, *path_in_it);
+		else if (end_type == EndType::Joined) OffsetOpenJoined(group, *path_in_it);
+		else OffsetOpenPath(group, *path_in_it, end_type);
 	}
 }
 

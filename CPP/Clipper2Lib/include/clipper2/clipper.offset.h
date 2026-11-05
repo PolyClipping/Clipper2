@@ -55,7 +55,6 @@ private:
 	PolyTree64* solution_tree = nullptr;
 	std::vector<Group> groups_;
 	JoinType join_type_ = JoinType::Bevel;
-	EndType end_type_ = EndType::Polygon;
 
 	double miter_limit_ = 0.0;
 	double arc_tolerance_ = 0.0;
@@ -75,9 +74,10 @@ private:
 	void DoMiter(const Path64& path, size_t j, size_t k, double cos_a);
 	void DoRound(const Path64& path, size_t j, size_t k, double angle);
 	void BuildNormals(const Path64& path);
+	void SetArcSteps(double delta);
 	void OffsetPolygon(Group& group, const Path64& path);
 	void OffsetOpenJoined(Group& group, const Path64& path);
-	void OffsetOpenPath(Group& group, const Path64& path);
+	void OffsetOpenPath(Group& group, const Path64& path, EndType end_type);
 	void OffsetPoint(Group& group, const Path64& path, size_t j, size_t k);
 	void DoGroupOffset(Group &group);
 	void ExecuteInternal(double delta);

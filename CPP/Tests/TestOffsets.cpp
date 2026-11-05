@@ -698,3 +698,75 @@ TEST(Clipper2Tests, TestOffsets13) // see #965
   const auto area2 = std::abs(Area(solution2));
   EXPECT_EQ(area2, 122);
 }
+
+TEST(Clipper2Tests, TestOffsetsJoinedTwoPointPathOrder)
+{
+  // a 2-point joined path gets open path ends, which must not carry over to the next path
+  const Path64 two = { {0, 0}, {100, 0} };
+  const Path64 tri = { {0, 1000}, {500, 1000}, {500, 1500} };
+  const double tri_first = Area(InflatePaths(Paths64{ tri, two }, 20, JoinType::Miter, EndType::Joined));
+  const double two_first = Area(InflatePaths(Paths64{ two, tri }, 20, JoinType::Miter, EndType::Joined));
+  EXPECT_EQ(tri_first, 73268.5);
+  EXPECT_EQ(two_first, tri_first);
+}
+
+TEST(Clipper2Tests, TestOffsetsDegenerateGroupKeepsDeltaSign)
+{
+  // a polygon group without a closed path is always inflated, but later groups must still shrink
+  const Path64 line = { {0, 500}, {100, 500} };
+  const Path64 square = { {0, 0}, {100, 0}, {100, 100}, {0, 100} };
+
+  ClipperOffset line_offset;
+  line_offset.AddPath(line, JoinType::Miter, EndType::Polygon);
+  Paths64 line_solution;
+  line_offset.Execute(-10, line_solution);
+
+  ClipperOffset square_offset;
+  square_offset.AddPath(square, JoinType::Miter, EndType::Polygon);
+  Paths64 square_solution;
+  square_offset.Execute(-10, square_solution);
+  EXPECT_EQ(Area(square_solution), 6400);
+
+  ClipperOffset both_offset;
+  both_offset.AddPath(line, JoinType::Miter, EndType::Polygon);
+  both_offset.AddPath(square, JoinType::Miter, EndType::Polygon);
+  Paths64 both_solution;
+  both_offset.Execute(-10, both_solution);
+  EXPECT_EQ(Area(both_solution), Area(line_solution) + Area(square_solution));
+}
+
+TEST(Clipper2Tests, TestOffsetsDeltaCallbackRoundPointOrder)
+{
+  // a single point must be rounded for its own delta, not the arc steps left by an earlier path
+  const Path64 point = { {0, 0} };
+  const Path64 line = { {0, 1000}, {100, 1000} };
+  auto offset = [](const Paths64& paths)
+    {
+      ClipperOffset offset;
+      offset.AddPaths(paths, JoinType::Round, EndType::Joined);
+      offset.SetDeltaCallback([](const Path64&, const PathD&, size_t, size_t) { return 20.0; });
+      Paths64 solution;
+      offset.Execute(1.0, solution);
+      return Area(solution);
+    };
+  EXPECT_EQ(offset({ point, line }), offset({ line, point }));
+}
+
+TEST(Clipper2Tests, TestOffsetsSinglePointDeltaCallbackNormals)
+{
+  ClipperOffset offset;
+  // the points come before and after a longer path so neither can see another path's normals
+  offset.AddPaths({ {{0, 0}}, {{100, 0}, {200, 0}, {200, 100}}, {{500, 500}} }, JoinType::Square, EndType::Polygon);
+
+  bool normals_match_path = true;
+  offset.SetDeltaCallback([&normals_match_path](const Path64& path, const PathD& path_norms, size_t, size_t)
+    {
+      normals_match_path = normals_match_path && path_norms.size() == path.size();
+      return 10.0;
+    });
+
+  Paths64 solution;
+  offset.Execute(1.0, solution);
+  EXPECT_TRUE(normals_match_path);
+  EXPECT_EQ(solution.size(), 3);
+}
