@@ -795,3 +795,21 @@ TEST(Clipper2Tests, TestOffsetsEmptyGroupOrientation)
   offset.Execute(10, solution);
   EXPECT_EQ(Area(solution), -14400);
 }
+
+#ifdef USINGZ
+TEST(Clipper2Tests, TestOffsetsSquareJoinKeepsZ)
+{
+  // a square join's two corner vertices are built from one input vertex, so both must keep its z
+  const Path64 square = { {0, 0, 1}, {100, 0, 2}, {100, 100, 3}, {0, 100, 4} };
+  const Paths64 solution = InflatePaths({ square }, 10, JoinType::Square, EndType::Polygon);
+  ASSERT_EQ(solution.size(), 1);
+  ASSERT_EQ(solution[0].size(), 8);
+
+  for (const Point64& pt : solution[0])
+  {
+    const Point64& corner = (pt.x < 50) ? ((pt.y < 50) ? square[0] : square[3]) :
+      ((pt.y < 50) ? square[1] : square[2]);
+    EXPECT_EQ(pt.z, corner.z);
+  }
+}
+#endif

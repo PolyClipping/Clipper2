@@ -257,23 +257,25 @@ void ClipperOffset::DoSquare(const Path64& path, size_t j, size_t k)
 	PointD pt2 = TranslatePoint(ptQ, group_delta_ * -vec.y, group_delta_ * vec.x);
 	// get 2 vertices along one edge offset
 	PointD pt3 = GetPerpendicD(path[k], norms[k], group_delta_);
+	PointD pt4 = (j == k) ?
+		PointD(pt3.x + vec.x * group_delta_, pt3.y + vec.y * group_delta_) :
+		GetPerpendicD(path[j], norms[k], group_delta_);
+	PointD pt = ptQ;
+	GetLineIntersectPt(pt1, pt2, pt3, pt4, pt);
+#ifdef USINGZ
+	pt.z = ptQ.z; // GetLineIntersectPt clears z, but this point belongs to path[j]
+#endif
+
+	//get the second intersect point through reflecion
 	if (j == k)
 	{
-		PointD pt4 = PointD(pt3.x + vec.x * group_delta_, pt3.y + vec.y * group_delta_);
-		PointD pt = ptQ;
-		GetLineIntersectPt(pt1, pt2, pt3, pt4, pt);
-		//get the second intersect point through reflecion
-        path_out.emplace_back(ReflectPoint(pt, ptQ));
-        path_out.emplace_back(pt);
+		path_out.emplace_back(ReflectPoint(pt, ptQ));
+		path_out.emplace_back(pt);
 	}
 	else
 	{
-		PointD pt4 = GetPerpendicD(path[j], norms[k], group_delta_);
-		PointD pt = ptQ;
-		GetLineIntersectPt(pt1, pt2, pt3, pt4, pt);
-        path_out.emplace_back(pt);
-		//get the second intersect point through reflecion
-        path_out.emplace_back(ReflectPoint(pt, ptQ));
+		path_out.emplace_back(pt);
+		path_out.emplace_back(ReflectPoint(pt, ptQ));
 	}
 }
 
