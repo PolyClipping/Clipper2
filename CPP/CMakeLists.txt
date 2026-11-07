@@ -215,7 +215,7 @@ if(CLIPPER2_EXAMPLES)
 
     foreach(ex ${EXAMPLES})
       add_executable(${ex} Examples/${ex}/${ex}.cpp)
-      target_link_libraries(${ex} PRIVATE Clipper2 Clipper2utils)
+      target_link_libraries(${ex} PRIVATE Clipper2utils)
     endforeach()
 
     file(COPY Examples/Inflate/rabbit.svg DESTINATION ${CMAKE_BINARY_DIR} FILE_PERMISSIONS OWNER_READ GROUP_READ WORLD_READ )
@@ -227,7 +227,7 @@ if(CLIPPER2_EXAMPLES)
     set(EXAMPLESZ "UsingZ")
     foreach(ex ${EXAMPLESZ})
       add_executable(${ex} Examples/${ex}/${ex}.cpp)
-      target_link_libraries(${ex} PRIVATE Clipper2Z Clipper2Zutils)
+      target_link_libraries(${ex} PRIVATE Clipper2Zutils)
     endforeach()
 
     list(APPEND ALL_EXAMPLES ${EXAMPLESZ})
@@ -264,9 +264,9 @@ if(CLIPPER2_TESTS)
   endif()
 
   if(TARGET gtest AND TARGET gtest_main)
-    set(gtest_libs gtest gtest_main)
+    set(gtest_libs gtest_main)
   elseif(TARGET GTest::gtest AND TARGET GTest::gtest_main)
-    set(gtest_libs GTest::gtest GTest::gtest_main)
+    set(gtest_libs GTest::gtest_main)
   endif()
 
   set(ClipperTests_SRC
@@ -292,7 +292,7 @@ if(CLIPPER2_TESTS)
   if (NOT (CLIPPER2_USINGZ STREQUAL "ONLY"))
     list(APPEND CLIPPER2_TESTS "ClipperTests")
     add_executable(ClipperTests ${ClipperTests_SRC})
-    target_link_libraries(ClipperTests ${gtest_libs} Clipper2 Clipper2utils)
+    target_link_libraries(ClipperTests ${gtest_libs} Clipper2utils)
 
     gtest_discover_tests(ClipperTests
       # set a working directory to your project root so that you can find test data via paths relative to the project root
@@ -304,7 +304,7 @@ if(CLIPPER2_TESTS)
   if (NOT (CLIPPER2_USINGZ STREQUAL "OFF"))
     list(APPEND CLIPPER2_TESTS "ClipperTestsZ")
     add_executable(ClipperTestsZ ${ClipperTests_SRC})
-    target_link_libraries(ClipperTestsZ ${gtest_libs} Clipper2Z Clipper2Zutils)
+    target_link_libraries(ClipperTestsZ ${gtest_libs} Clipper2Zutils)
 
     gtest_discover_tests(ClipperTestsZ
       # set a working directory so your project root so that you can find test data via paths relative to the project root

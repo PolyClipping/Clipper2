@@ -116,6 +116,7 @@ the four vertices that define the two segments that are intersecting.
 #include "clipper2/clipper.engine.h"
 #include "clipper2/clipper.offset.h"
 #include "clipper2/clipper.rectclip.h"
+#include "clipper2/clipper.minkowski.h"
 #include <cstdlib>
 
 namespace Clipper2Lib {

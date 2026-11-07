@@ -11,6 +11,7 @@
 #define CLIPPER_MINKOWSKI_H
 
 #include "clipper2/clipper.core.h"
+#include "clipper2/clipper.engine.h"
 
 namespace Clipper2Lib
 {
