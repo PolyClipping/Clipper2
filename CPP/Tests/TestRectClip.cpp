@@ -74,3 +74,14 @@ TEST(Clipper2Tests, TestRectClipOrientation) //#864
   ASSERT_EQ(solution.size(), 1);
   EXPECT_EQ(IsPositive(subject), IsPositive(solution.front()));
 }
+
+TEST(Clipper2Tests, TestRectClipSharedEdge)
+{
+  // the shared edge crosses the top of the rect at exactly x = 7.5, and the two triangles
+  // give it in opposite directions, so both must round that crossing to the same point
+  const Rect64 rect(-10, 115, 30, 150);
+  const Paths64 adjacent = { MakePath({ 0,100, 11,122, 0,144 }), MakePath({ 11,122, 0,100, 11,78 }) };
+  const Paths64 separate = RectClip(rect, adjacent);
+  const Paths64 merged = RectClip(rect, Union(adjacent, FillRule::NonZero));
+  EXPECT_EQ(Area(separate), Area(merged));
+}

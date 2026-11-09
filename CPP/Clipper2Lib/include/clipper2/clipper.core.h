@@ -948,9 +948,20 @@ namespace Clipper2Lib
 }
 #else
   template<typename T>
-  inline bool GetLineIntersectPt(const Point<T>& ln1a, const Point<T>& ln1b,
-    const Point<T>& ln2a, const Point<T>& ln2b, Point<T>& ip)
+  inline bool GetLineIntersectPt(const Point<T>& seg1a, const Point<T>& seg1b,
+    const Point<T>& seg2a, const Point<T>& seg2b, Point<T>& ip)
   {
+    // integer segments are evaluated from their bottom end, as the sweep does, so that
+    // a shared edge rounds to the same point whichever way round it is given
+    const bool rev1 = std::is_integral_v<T> &&
+      (seg1b.y > seg1a.y || (seg1b.y == seg1a.y && seg1b.x < seg1a.x));
+    const bool rev2 = std::is_integral_v<T> &&
+      (seg2b.y > seg2a.y || (seg2b.y == seg2a.y && seg2b.x < seg2a.x));
+    const Point<T>& ln1a = rev1 ? seg1b : seg1a;
+    const Point<T>& ln1b = rev1 ? seg1a : seg1b;
+    const Point<T>& ln2a = rev2 ? seg2b : seg2a;
+    const Point<T>& ln2b = rev2 ? seg2a : seg2b;
+
     // https://en.wikipedia.org/wiki/Line%E2%80%93line_intersection
     double dx1 = static_cast<double>(ln1b.x - ln1a.x);
     double dy1 = static_cast<double>(ln1b.y - ln1a.y);
@@ -964,8 +975,19 @@ namespace Clipper2Lib
     else if (t >= 1.0) ip = ln1b;
     else
     {
-      ip.x = static_cast<T>(ln1a.x + t * dx1);
-      ip.y = static_cast<T>(ln1a.y + t * dy1);
+      // rounding rather than truncating toward zero keeps 'ip' within half a unit, and
+      // rounding the absolute value resolves an exact tie the same way for any segment
+      if constexpr (std::is_integral_v<T>)
+      {
+        ip.x = static_cast<T>(nearbyint(ln1a.x + t * dx1));
+        ip.y = static_cast<T>(nearbyint(ln1a.y + t * dy1));
+      }
+      else
+      {
+        ip.x = static_cast<T>(ln1a.x + t * dx1);
+        ip.y = static_cast<T>(ln1a.y + t * dy1);
+      }
+
 #ifdef USINGZ
       ip.z = 0;
 #endif

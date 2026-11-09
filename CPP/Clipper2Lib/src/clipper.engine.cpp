@@ -2497,8 +2497,10 @@ namespace Clipper2Lib {
     //that edge intersections are processed from the bottom up, but it's also
     //crucial that intersections only occur between adjacent edges.
 
-    //First we do a quicksort so intersections proceed in a bottom up order ...
-    std::sort(intersect_nodes_.begin(), intersect_nodes_.end(), IntersectListSort);
+    //First we sort so intersections proceed in a bottom up order. The sort is
+    //stable because the order of intersections at the same point changes the
+    //output, and std::sort would leave it to the standard library ...
+    std::stable_sort(intersect_nodes_.begin(), intersect_nodes_.end(), IntersectListSort);
     //Now as we process these intersections, we must sometimes adjust the order
     //to ensure that intersecting edges are always adjacent ...
 

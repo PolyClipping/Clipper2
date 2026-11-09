@@ -199,3 +199,16 @@ TEST(Clipper2Tests, TestXorDivergingSharedEdges) // PolyClipping/Clipper2#13
 
   EXPECT_EQ(Clipper2Lib::Area(solution), Clipper2Lib::Area(swapped));
 }
+
+TEST(Clipper2Tests, TestDifferenceRoundsIntersections) // PolyClipping/Clipper2#13
+{
+  // the exact difference has an area of 3.27; truncating its intersection points
+  // reversed the only contour to an area of -3.5
+  Clipper2Lib::Paths64 subject = { Clipper2Lib::MakePath({ 0,10, 5,2, 7,1 }) };
+  Clipper2Lib::Paths64 clip = { Clipper2Lib::MakePath({ 3,6, 6,1, 11,11 }) };
+  Clipper2Lib::Paths64 solution = Clipper2Lib::Difference(subject, clip, Clipper2Lib::FillRule::NonZero);
+
+  ASSERT_EQ(solution.size(), 1);
+  EXPECT_TRUE(Clipper2Lib::IsPositive(solution[0]));
+  EXPECT_NEAR(Clipper2Lib::Area(solution), 3.27, 1.0);
+}
