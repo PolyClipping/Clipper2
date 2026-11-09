@@ -1764,6 +1764,29 @@ namespace Clipper2Lib {
     }
 
     InsertScanline(e->top.y);
+
+    //rounded TopX values can hide a wrong order between edges leaving a shared
+    //vertex, so restore their order here rather than crossing them further on
+    Active* prev = e->prev_in_ael;
+
+    while (prev && prev->bot == e->bot && !IsHorizontal(*prev) &&
+      CrossProductSign(prev->top, e->bot, e->top) > 0)
+    {
+      IntersectEdges(*prev, *e, e->bot);
+      SwapPositionsInAEL(*prev, *e);
+      prev = e->prev_in_ael;
+    }
+
+    Active* next = e->next_in_ael;
+
+    while (next && next->bot == e->bot && !IsHorizontal(*next) &&
+      CrossProductSign(next->top, e->bot, e->top) < 0)
+    {
+      IntersectEdges(*e, *next, e->bot);
+      SwapPositionsInAEL(*e, *next);
+      next = e->next_in_ael;
+    }
+
     CheckJoinLeft(*e, e->bot);
     CheckJoinRight(*e, e->bot, true); // (#500)
   }
