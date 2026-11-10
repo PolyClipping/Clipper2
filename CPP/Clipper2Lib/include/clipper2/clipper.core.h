@@ -903,70 +903,114 @@ namespace Clipper2Lib
     return Area<T>(poly) >= 0;
   }
 
+#if defined(CLIPPER2_HI_PRECISION) && CLIPPER2_HI_PRECISION
+  // the exact sign of (b - a) x (d - c) for floating point coordinates, after Shewchuk's
+  // "Adaptive Precision Floating-Point Arithmetic and Fast Robust Geometric Predicates",
+  // barring overflow of the differences. It is exact while the nonzero coordinates are within
+  // a factor of 2^480 of each other in double, and further in a wider long double. Beyond that
+  // a scaled product can underflow, though GetLineIntersectPt still clamps to seg1's bounds.
+  template <typename T>
+  inline int CrossProductSignExact(const Point<T>& a, const Point<T>& b,
+    const Point<T>& c, const Point<T>& d)
+  {
+    CLIPPER2_NO_FP_CONTRACT
+    static_assert(std::is_floating_point_v<T>);
+    // float is promoted to double, while long double keeps its own precision
+    using F = std::common_type_t<T, double>;
+
+    // each difference is split into its rounded value and that value's error
+    auto two_diff = [](F p, F q, F* r)
+    {
+      r[0] = p - q;
+      const F q_virt = p - r[0];
+      r[1] = (p - (r[0] + q_virt)) + (q_virt - q);
+    };
+    F ux[2], uy[2], vx[2], vy[2];
+    two_diff(b.x, a.x, ux);
+    two_diff(b.y, a.y, uy);
+    two_diff(d.x, c.x, vx);
+    two_diff(d.y, c.y, vy);
+    const F u_max = (std::max)(std::fabs(ux[0]), std::fabs(uy[0]));
+    const F v_max = (std::max)(std::fabs(vx[0]), std::fabs(vy[0]));
+
+    if (u_max == 0 || v_max == 0) return 0;
+
+    // scaling each vector by a power of two keeps the sign, and keeps the products of short
+    // vectors from underflowing
+    const int u_exp = std::ilogb(u_max);
+    const int v_exp = std::ilogb(v_max);
+
+    for (int i = 0; i < 2; ++i)
+    {
+      ux[i] = std::ldexp(ux[i], -u_exp);
+      uy[i] = std::ldexp(uy[i], -u_exp);
+      vx[i] = std::ldexp(vx[i], -v_exp);
+      vy[i] = std::ldexp(vy[i], -v_exp);
+    }
+
+    const F left = ux[0] * vy[0];
+    const F right = uy[0] * vx[0];
+    const F det = left - right;
+    constexpr F eps = std::numeric_limits<F>::epsilon() / 2;
+    const F detsum = std::fabs(left) + std::fabs(right);
+
+    // the rounded result decides unless it is within its error bound, which only holds when
+    // the products haven't underflowed
+    if (detsum >= (std::numeric_limits<F>::min)() / eps)
+    {
+      const F bound = (3 + 16 * eps) * eps * detsum;
+
+      if (det > bound) return 1;
+
+      if (det < -bound) return -1;
+    }
+
+    // otherwise the products are split with fma and summed without loss into an expansion
+    // whose largest part has the sign
+    F sum[16];
+    int len = 0;
+    auto grow = [&](F q)
+    {
+      int k = 0;
+
+      for (int i = 0; i < len; ++i)
+      {
+        const F s = q + sum[i];
+        const F s_virt = s - q;
+        const F err = (q - (s - s_virt)) + (sum[i] - s_virt);
+        q = s;
+
+        if (err != 0) sum[k++] = err;
+      }
+
+      if (q != 0) sum[k++] = q;
+
+      len = k;
+    };
+
+    for (int i = 0; i < 2; ++i)
+    {
+      for (int j = 0; j < 2; ++j)
+      {
+        const F p = ux[i] * vy[j];
+        const F q = -uy[i] * vx[j];
+        grow(p);
+        grow(std::fma(ux[i], vy[j], -p));
+        grow(q);
+        grow(std::fma(-uy[i], vx[j], -q));
+      }
+    }
+
+    if (len == 0) return 0;
+
+    return sum[len - 1] > 0 ? 1 : -1;
+  }
+#endif
+
   // GetLineIntersectPt - a 'true' result is non-parallel. The 'ip' will also
   // be constrained to seg1. However, it's possible that 'ip' won't be inside
   // seg2, even when 'ip' hasn't been constrained (ie 'ip' is inside seg1).
 
-#if defined(CLIPPER2_HI_PRECISION) && CLIPPER2_HI_PRECISION
-  // caution: this will compromise performance
-  // https://github.com/AngusJohnson/Clipper2/issues/317#issuecomment-1314023253
-  // See also CPP/BenchMark/GetIntersectPtBenchmark.cpp
-  #define CC_MIN(x,y) ((x)>(y)?(y):(x))
-  #define CC_MAX(x,y) ((x)<(y)?(y):(x))
-  template<typename T>
-  inline bool GetLineIntersectPt(const Point<T>& ln1a, const Point<T>& ln1b,
-    const Point<T>& ln2a, const Point<T>& ln2b, Point<T>& ip)
-  {
-    CLIPPER2_NO_FP_CONTRACT
-    double ln1dy = static_cast<double>(ln1b.y - ln1a.y);
-    double ln1dx = static_cast<double>(ln1a.x - ln1b.x);
-    double ln2dy = static_cast<double>(ln2b.y - ln2a.y);
-    double ln2dx = static_cast<double>(ln2a.x - ln2b.x);
-    double det = (ln2dy * ln1dx) - (ln1dy * ln2dx);
-    if (det == 0.0) return false;
-    T bb0minx = CC_MIN(ln1a.x, ln1b.x);
-    T bb0miny = CC_MIN(ln1a.y, ln1b.y);
-    T bb0maxx = CC_MAX(ln1a.x, ln1b.x);
-    T bb0maxy = CC_MAX(ln1a.y, ln1b.y);
-    T bb1minx = CC_MIN(ln2a.x, ln2b.x);
-    T bb1miny = CC_MIN(ln2a.y, ln2b.y);
-    T bb1maxx = CC_MAX(ln2a.x, ln2b.x);
-    T bb1maxy = CC_MAX(ln2a.y, ln2b.y);
-
-    if constexpr (std::is_integral_v<T>)
-    {
-      int64_t originx = (CC_MIN(bb0maxx, bb1maxx) + CC_MAX(bb0minx, bb1minx)) >> 1;
-      int64_t originy = (CC_MIN(bb0maxy, bb1maxy) + CC_MAX(bb0miny, bb1miny)) >> 1;
-      double ln0c = (ln1dy * static_cast<double>(ln1a.x - originx)) +
-        (ln1dx * static_cast<double>(ln1a.y - originy));
-      double ln1c = (ln2dy * static_cast<double>(ln2a.x - originx)) +
-        (ln2dx * static_cast<double>(ln2a.y - originy));
-      double hitx = ((ln1dx * ln1c) - (ln2dx * ln0c)) / det;
-      double hity = ((ln2dy * ln0c) - (ln1dy * ln1c)) / det;
-
-      ip.x = originx + (T)nearbyint(hitx);
-      ip.y = originy + (T)nearbyint(hity);
-    }
-    else
-    {
-      double originx = (CC_MIN(bb0maxx, bb1maxx) + CC_MAX(bb0minx, bb1minx)) / 2.0;
-      double originy = (CC_MIN(bb0maxy, bb1maxy) + CC_MAX(bb0miny, bb1miny)) / 2.0;
-      double ln0c = (ln1dy * static_cast<double>(ln1a.x - originx)) +
-        (ln1dx * static_cast<double>(ln1a.y - originy));
-      double ln1c = (ln2dy * static_cast<double>(ln2a.x - originx)) +
-        (ln2dx * static_cast<double>(ln2a.y - originy));
-      double hitx = ((ln1dx * ln1c) - (ln2dx * ln0c)) / det;
-      double hity = ((ln2dy * ln0c) - (ln1dy * ln1c)) / det;
-
-      ip.x = originx + static_cast<T>(hitx);
-      ip.y = originy + static_cast<T>(hity);
-    }
-#ifdef USINGZ
-    ip.z = 0;
-#endif
-    return true;
-}
-#else
   template<typename T>
   inline bool GetLineIntersectPt(const Point<T>& seg1a, const Point<T>& seg1b,
     const Point<T>& seg2a, const Point<T>& seg2b, Point<T>& ip)
@@ -983,19 +1027,105 @@ namespace Clipper2Lib
     const Point<T>& ln2a = rev2 ? seg2b : seg2a;
     const Point<T>& ln2b = rev2 ? seg2a : seg2b;
 
+    // integers are widened to 64 bits so that narrower types can't overflow when subtracted
+    auto wide = [](T v)
+    {
+      if constexpr (std::is_integral_v<T>) return static_cast<int64_t>(v);
+      else return v;
+    };
+
     // https://en.wikipedia.org/wiki/Line%E2%80%93line_intersection
-    double dx1 = static_cast<double>(ln1b.x - ln1a.x);
-    double dy1 = static_cast<double>(ln1b.y - ln1a.y);
-    double dx2 = static_cast<double>(ln2b.x - ln2a.x);
-    double dy2 = static_cast<double>(ln2b.y - ln2a.y);
+    double dx1 = static_cast<double>(wide(ln1b.x) - ln1a.x);
+    double dy1 = static_cast<double>(wide(ln1b.y) - ln1a.y);
+    double dx2 = static_cast<double>(wide(ln2b.x) - ln2a.x);
+    double dy2 = static_cast<double>(wide(ln2b.y) - ln2a.y);
 
     double det = dy1 * dx2 - dy2 * dx1;
     if (det == 0.0) return false;
-    double t = ((ln1a.x - ln2a.x) * dy2 - (ln1a.y - ln2a.y) * dx2) / det;
+#if defined(CLIPPER2_HI_PRECISION) && CLIPPER2_HI_PRECISION
+    // a rounded crossing near an end of seg1 can't tell which side of that end it is, but
+    // whether seg1's ends straddle seg2's line can be decided exactly
+    int side_a, side_b, heading;
+
+    if constexpr (std::is_integral_v<T>)
+    {
+      // in 64 bits, so that narrower types can't overflow
+      const Point64 a1(ln1a), b1(ln1b), a2(ln2a), b2(ln2b);
+      side_a = CrossProductSign(a2, b2, a1);
+      side_b = CrossProductSign(a2, b2, b1);
+      heading = CrossProductSign(a1, b1, Point64(b1.x + b2.x - a2.x, b1.y + b2.y - a2.y));
+    }
+    else
+    {
+      side_a = CrossProductSignExact(ln2a, ln2b, ln2a, ln1a);
+      side_b = CrossProductSignExact(ln2a, ln2b, ln2a, ln1b);
+      heading = CrossProductSignExact(ln1a, ln1b, ln2a, ln2b);
+    }
+
+    // only whether 't' falls before, inside or beyond seg1 matters here
+    double t;
+
+    if (side_a == 0) t = 0.0;
+    else if (side_b == 0) t = 1.0;
+    else if (side_a != side_b) t = 0.5;
+    else
+    {
+      // with both ends on one side, the crossing lies beyond the end nearer seg2's line,
+      // which is ln1a when seg1 heads away from that line
+      t = (heading == -side_a) ? 0.0 : 1.0;
+    }
+
+#else
+    const double t = ((wide(ln1a.x) - ln2a.x) * dy2 - (wide(ln1a.y) - ln2a.y) * dx2) / det;
+#endif
     if (t <= 0.0) ip = ln1a;
     else if (t >= 1.0) ip = ln1b;
     else
     {
+#if defined(CLIPPER2_HI_PRECISION) && CLIPPER2_HI_PRECISION
+      // this compromises performance, see CPP/BenchMark/GetIntersectPtBenchmark.cpp and
+      // https://github.com/AngusJohnson/Clipper2/issues/317#issuecomment-1314023253
+      // The crossing is found relative to the middle of the segments' common extent,
+      // which limits the loss of precision with large coordinates.
+      auto mid = [](T lo, T hi)
+      {
+        if constexpr (std::is_integral_v<T>) return (static_cast<int64_t>(lo) + hi) >> 1;
+        else return (lo + hi) / 2.0;
+      };
+      const auto origin_x = mid((std::max)((std::min)(ln1a.x, ln1b.x), (std::min)(ln2a.x, ln2b.x)),
+        (std::min)((std::max)(ln1a.x, ln1b.x), (std::max)(ln2a.x, ln2b.x)));
+      const auto origin_y = mid((std::max)((std::min)(ln1a.y, ln1b.y), (std::min)(ln2a.y, ln2b.y)),
+        (std::min)((std::max)(ln1a.y, ln1b.y), (std::max)(ln2a.y, ln2b.y)));
+      const double c1 = dy1 * static_cast<double>(ln1a.x - origin_x) - dx1 * static_cast<double>(ln1a.y - origin_y);
+      const double c2 = dy2 * static_cast<double>(ln2a.x - origin_x) - dx2 * static_cast<double>(ln2a.y - origin_y);
+      const double hit_x = (dx2 * c1 - dx1 * c2) / det;
+      const double hit_y = (dy2 * c1 - dy1 * c2) / det;
+
+      // with huge coordinates the crossing of near parallel lines can be carried far outside
+      // seg1, so it's kept within seg1's bounds before it is converted
+      const T min_x = (std::min)(ln1a.x, ln1b.x);
+      const T max_x = (std::max)(ln1a.x, ln1b.x);
+      const T min_y = (std::min)(ln1a.y, ln1b.y);
+      const T max_y = (std::max)(ln1a.y, ln1b.y);
+      const double local_x = std::clamp(hit_x, static_cast<double>(min_x - origin_x),
+        static_cast<double>(max_x - origin_x));
+      const double local_y = std::clamp(hit_y, static_cast<double>(min_y - origin_y),
+        static_cast<double>(max_y - origin_y));
+
+      using O = std::remove_const_t<decltype(origin_x)>;
+
+      if constexpr (std::is_integral_v<T>)
+      {
+        ip.x = static_cast<T>(std::clamp<O>(origin_x + static_cast<O>(nearbyint(local_x)), min_x, max_x));
+        ip.y = static_cast<T>(std::clamp<O>(origin_y + static_cast<O>(nearbyint(local_y)), min_y, max_y));
+      }
+      else
+      {
+        ip.x = static_cast<T>(std::clamp<O>(origin_x + local_x, min_x, max_x));
+        ip.y = static_cast<T>(std::clamp<O>(origin_y + local_y, min_y, max_y));
+      }
+
+#else
       // rounding rather than truncating toward zero keeps 'ip' within half a unit, and
       // rounding the absolute value resolves an exact tie the same way for any segment
       if constexpr (std::is_integral_v<T>)
@@ -1009,13 +1139,13 @@ namespace Clipper2Lib
         ip.y = static_cast<T>(ln1a.y + t * dy1);
       }
 
+#endif
 #ifdef USINGZ
       ip.z = 0;
 #endif
     }
     return true;
   }
-#endif
 
   template<typename T>
   inline Point<T> TranslatePoint(const Point<T>& pt, double dx, double dy)

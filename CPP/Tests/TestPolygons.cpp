@@ -84,7 +84,7 @@ TEST(Clipper2Tests, TestMultiplePolygons)
       EXPECT_NEAR(measured_area, stored_area, 0.075 * measured_area) << " in test " << test_number;
     else if (test_number == 26)
       EXPECT_NEAR(measured_area, stored_area, 0.05 * measured_area) << " in test " << test_number;
-    else if (IsInList(test_number, { 15, 52, 53, 54, 59, 60, 64, 117, 119, 184 }))
+    else if (IsInList(test_number, { 15, 52, 53, 54, 59, 60, 64, 66, 117, 119, 184 }))
       EXPECT_NEAR(measured_area, stored_area, 0.02 * measured_area) << " in test " << test_number;
     else
       EXPECT_NEAR(measured_area, stored_area, 0.01 * measured_area) << " in test " << test_number;
@@ -98,6 +98,101 @@ TEST(Clipper2Tests, TestMultiplePolygons)
   Clipper2Lib::PathsD subjd, clipd, solutiond;
   Clipper2Lib::FillRule frd = Clipper2Lib::FillRule::NonZero;
 }
+
+TEST(Clipper2Tests, TestDifferenceClampsIntersectionToSegment)
+{
+  // the lines of two edges cross just beyond the subject vertex at 6,6, and with
+  // CLIPPER2_HI_PRECISION that crossing used to be returned unclamped, leaving a reversed contour
+  Clipper2Lib::Paths64 subject = { Clipper2Lib::MakePath({ 6,6, 8,2, 2,12, 3,7, 12,4 }) };
+  Clipper2Lib::Paths64 clip = { Clipper2Lib::MakePath({ 10,3, 7,12, 3,1, 2,11, 11,2, 1,8 }) };
+  Clipper2Lib::Paths64 solution = Clipper2Lib::Difference(subject, clip, Clipper2Lib::FillRule::EvenOdd);
+
+  EXPECT_TRUE(std::all_of(solution.begin(), solution.end(),
+    [](const Clipper2Lib::Path64& path) { return Clipper2Lib::IsPositive(path); }));
+}
+
+#if defined(CLIPPER2_HI_PRECISION) && CLIPPER2_HI_PRECISION
+TEST(Clipper2Tests, TestHiPrecisionIntersectNearSegmentEnd)
+{
+  using Clipper2Lib::Point64;
+  using Clipper2Lib::PointD;
+  Point64 ip;
+  PointD ipd;
+
+  // the crossing at 10,10 is inside the first segment, though a rounded crossing can't tell
+  const Point64 a(1000000000, 1000000000), b(0, 0), c(10, 10), d(-999999990, -999999989);
+  ASSERT_TRUE(Clipper2Lib::GetLineIntersectPt(a, b, c, d, ip));
+  EXPECT_EQ(ip, Point64(10, 10));
+  ASSERT_TRUE(Clipper2Lib::GetLineIntersectPt(PointD(a), PointD(b), PointD(c), PointD(d), ipd));
+  EXPECT_NEAR(ipd.x, 10, 1e-6);
+  EXPECT_NEAR(ipd.y, 10, 1e-6);
+
+  // the crossing is beside the first segment's start, where a rounded crossing cancels to that start
+  ASSERT_TRUE(Clipper2Lib::GetLineIntersectPt(PointD(1e12, 0.0), PointD(0.0, 1e12), PointD(0.0, 1e-5),
+    PointD(1e12, 1e-5), ipd));
+  EXPECT_DOUBLE_EQ(ipd.x, 1e12);
+  EXPECT_DOUBLE_EQ(ipd.y, 1e-5);
+  using PointF = Clipper2Lib::Point<float>;
+  PointF ipf;
+  ASSERT_TRUE(Clipper2Lib::GetLineIntersectPt(PointF(1e12f, 0.0f), PointF(0.0f, 1e12f), PointF(0.0f, 1e-5f),
+    PointF(1e12f, 1e-5f), ipf));
+  EXPECT_FLOAT_EQ(ipf.x, 1e12f);
+  EXPECT_FLOAT_EQ(ipf.y, 1e-5f);
+
+  // long double ends that differ by less than double's precision are still told apart
+  using PointL = Clipper2Lib::Point<long double>;
+  const long double tiny = std::ldexp(1.0L, 4 - std::numeric_limits<long double>::digits);
+  PointL ipl;
+  ASSERT_TRUE(Clipper2Lib::GetLineIntersectPt(PointL(1 + tiny, 0.0L), PointL(1.0L, 1.0L), PointL(1 + tiny / 2, 0.0L),
+    PointL(1 + tiny / 2, 1.0L), ipl));
+  EXPECT_EQ(ipl, PointL(1 + tiny / 2, 0.5L));
+
+  // the crossing at m is inside the first segment, though products of such short vectors underflow
+  const PointD m(std::ldexp(1.0, -530), std::ldexp(1.0, -530));
+  const PointD n(2 * m.x, (2 + std::ldexp(1.0, -51)) * m.y);
+  ASSERT_TRUE(Clipper2Lib::GetLineIntersectPt(PointD(0.0, 0.0), PointD(1.0, 1.0), m, n, ipd));
+  EXPECT_TRUE(ipd.x >= m.x && ipd.x <= n.x && ipd.y >= m.y && ipd.y <= n.y);
+
+  // the lines cross at 0,0, beyond the first segment's second end
+  ASSERT_TRUE(Clipper2Lib::GetLineIntersectPt(Point64(500000001, 500000001), Point64(500000000, 500000000),
+    Point64(0, 0), Point64(1000000000, 999999999), ip));
+  EXPECT_EQ(ip, Point64(500000000, 500000000));
+
+  // segments leaving a shared vertex meet exactly there
+  ASSERT_TRUE(Clipper2Lib::GetLineIntersectPt(Point64(889821762, 0), Point64(441613919, -370558076),
+    Point64(889821762, 0), Point64(665717839, -185279037), ip));
+  EXPECT_EQ(ip, Point64(889821762, 0));
+
+  // near parallel lines at huge coordinates, whose rounded crossing lands far outside both segments
+  const Point64 e(882221495591671156, -709114218932650014), f(-1988259314537543047, 880639977513308803);
+  const Point64 g(2169548593363292491, -1422072706116861579), h(1389069062445448553, -989820866934225391);
+  ASSERT_TRUE(Clipper2Lib::GetLineIntersectPt(e, f, g, h, ip));
+  EXPECT_TRUE(ip.x >= f.x && ip.x <= e.x && ip.y >= e.y && ip.y <= f.y);
+
+  // narrower coordinate types are classified in 64 bits
+  using Point16 = Clipper2Lib::Point<int16_t>;
+  Point16 ip16;
+  ASSERT_TRUE(Clipper2Lib::GetLineIntersectPt(Point16(0, 0), Point16(20000, 100), Point16(10000, 100),
+    Point16(30000, 150), ip16));
+  EXPECT_EQ(ip16, Point16(20000, 100));
+  using Point32 = Clipper2Lib::Point<int32_t>;
+  Point32 ip32;
+  ASSERT_TRUE(Clipper2Lib::GetLineIntersectPt(Point32(800000000, 0), Point32(1000000000, 100),
+    Point32(1100000000, 200), Point32(1400000000, 300), ip32));
+  EXPECT_EQ(ip32, Point32(1000000000, 100));
+}
+#endif
+
+TEST(Clipper2Tests, TestIntersectInt32SpanBeyondIntMax)
+{
+  // the segments' spans overflow int, so their ends must be subtracted in 64 bits
+  using Point32 = Clipper2Lib::Point<int32_t>;
+  Point32 ip;
+  ASSERT_TRUE(Clipper2Lib::GetLineIntersectPt(Point32(-2000000000, -1000000000), Point32(2000000000, 1000000000),
+    Point32(-1000000000, 2000000000), Point32(1000000000, -2000000000), ip));
+  EXPECT_EQ(ip, Point32(0, 0));
+}
+
 TEST(Clipper2Tests, TestHorzSpikes) //#720
 {
   Clipper2Lib::Paths64 paths = {

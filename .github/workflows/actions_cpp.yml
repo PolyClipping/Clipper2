@@ -91,6 +91,23 @@ jobs:
       run: |
         cd CPP/build
         env CTEST_OUTPUT_ON_FAILURE=1 make test
+  ubuntu-latest-gcc-hi-precision:
+    runs-on: 'ubuntu-latest'
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '16'
+    - name: Build
+      run: |
+        mkdir CPP/build
+        cd CPP/build
+        cmake .. -DCLIPPER2_TESTS=ON -DCLIPPER2_HI_PRECISION=ON
+        make
+    - name: Run tests
+      run: |
+        cd CPP/build
+        env CTEST_OUTPUT_ON_FAILURE=1 make test
   ubuntu-24.04-gcc-11:
     runs-on: 'ubuntu-24.04'
     steps:
