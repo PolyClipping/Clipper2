@@ -131,6 +131,13 @@ if (NOT (CLIPPER2_USINGZ STREQUAL "OFF"))
   endif ()
 endif()
 
+# GCC fuses a * b + c into one rounding on targets with FMA and has no pragma to stop it (see
+# CLIPPER2_NO_FP_CONTRACT). The option is public because header templates instantiated by
+# users must round the same way as the library.
+foreach (lib ${CLIPPER2_LIBS})
+  target_compile_options(${lib} PUBLIC $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-ffp-contract=off>)
+endforeach ()
+
 set_target_properties(${CLIPPER2_LIBS} PROPERTIES FOLDER Libraries
                                          VERSION ${PROJECT_VERSION}
                                          SOVERSION ${PROJECT_VERSION_MAJOR}
@@ -342,6 +349,13 @@ foreach(lib ${CLIPPER2_LIBS})
   else()
     set(PCFILE_LIB_SUFFIX "")
   endif()
+
+  # pkg-config can't tell which compiler will read it, so it passes GCC's option to any GNU style one
+  if (MSVC)
+    set(PCFILE_CFLAGS "")
+  else ()
+    set(PCFILE_CFLAGS " -ffp-contract=off")
+  endif ()
 
   # The definitions are read from the target, so pkg-config users compile the headers the way the library was built
   set(pc_defs "$<FILTER:$<TARGET_PROPERTY:${lib},INTERFACE_COMPILE_DEFINITIONS>,INCLUDE,.>")

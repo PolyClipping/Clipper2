@@ -212,3 +212,21 @@ TEST(Clipper2Tests, TestDifferenceRoundsIntersections) // PolyClipping/Clipper2#
   EXPECT_TRUE(Clipper2Lib::IsPositive(solution[0]));
   EXPECT_NEAR(Clipper2Lib::Area(solution), 3.27, 1.0);
 }
+
+#if !defined(CLIPPER2_HI_PRECISION) || !CLIPPER2_HI_PRECISION
+TEST(Clipper2Tests, TestIntersectPointIsNotFused)
+{
+  // both exact intersections have a coordinate of -100.5, and the tie rounds to even unless
+  // the multiply and add in GetLineIntersectPt are fused into one rounding, as Clang does
+  // by default on arm64 and GCC does on any target with FMA
+  using Clipper2Lib::Point64;
+  // reading a volatile stops the compiler folding the calls into constants without fusing
+  volatile int64_t zero = 0;
+  auto pt = [&zero](int64_t x, int64_t y) { return Point64(x + zero, y + zero); };
+  Point64 ip;
+  ASSERT_TRUE(Clipper2Lib::GetLineIntersectPt(pt(-207, -383), pt(350, 194), pt(347, 193), pt(-206, -384), ip));
+  EXPECT_EQ(ip, Point64(66, -100));
+  ASSERT_TRUE(Clipper2Lib::GetLineIntersectPt(pt(-383, -207), pt(194, 350), pt(193, 347), pt(-384, -206), ip));
+  EXPECT_EQ(ip, Point64(-100, 66));
+}
+#endif

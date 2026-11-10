@@ -21,6 +21,8 @@
 #define nearbyint(a) _mm_cvtsd_si64(_mm_set_sd(a)) /* Note: expression type is (int64_t) */
 #endif
 
+CLIPPER2_NO_FP_CONTRACT
+
 namespace Clipper2Lib {
 
   static const Rect64 invalid_rect = Rect64(false);

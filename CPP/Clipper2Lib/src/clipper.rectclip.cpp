@@ -10,6 +10,8 @@
 #include "clipper2/clipper.h"
 #include "clipper2/clipper.rectclip.h"
 
+CLIPPER2_NO_FP_CONTRACT
+
 namespace Clipper2Lib {
 
   //------------------------------------------------------------------------------

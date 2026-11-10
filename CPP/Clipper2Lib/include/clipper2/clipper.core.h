@@ -19,6 +19,18 @@
 #include <numeric>
 #include <cmath>
 
+// Fusing a * b + c into one rounding moves values that are then rounded to integers, so the
+// output would depend on the compiler and target. Clang fuses by default wherever FMA exists, so
+// this starts each library source and each inline function that multiplies and adds doubles, and
+// Sqr, whose callers add its products. GCC has no pragma for it, so GCC builds need
+// -ffp-contract=off, which the CMake targets and pkg-config files pass on. MSVC only fuses with
+// /fp:contract or /fp:fast.
+#if defined(__clang__)
+#define CLIPPER2_NO_FP_CONTRACT _Pragma("clang fp contract(off)")
+#else
+#define CLIPPER2_NO_FP_CONTRACT
+#endif
+
 namespace Clipper2Lib
 {
 
@@ -610,6 +622,7 @@ namespace Clipper2Lib
   template<typename T>
   inline double Sqr(T val)
   {
+    CLIPPER2_NO_FP_CONTRACT
     return static_cast<double>(val) * static_cast<double>(val);
   }
 
@@ -800,6 +813,7 @@ namespace Clipper2Lib
 
   template <typename T>
   inline double CrossProduct(const Point<T>& pt1, const Point<T>& pt2, const Point<T>& pt3) {
+    CLIPPER2_NO_FP_CONTRACT
     return (static_cast<double>(pt2.x - pt1.x) * static_cast<double>(pt3.y -
       pt2.y) - static_cast<double>(pt2.y - pt1.y) * static_cast<double>(pt3.x - pt2.x));
   }
@@ -807,11 +821,13 @@ namespace Clipper2Lib
   template <typename T>
   inline double CrossProduct(const Point<T>& vec1, const Point<T>& vec2)
   {
+    CLIPPER2_NO_FP_CONTRACT
     return static_cast<double>(vec1.y * vec2.x) - static_cast<double>(vec2.y * vec1.x);
   }
 
   template <typename T>
   inline double DotProduct(const Point<T>& pt1, const Point<T>& pt2, const Point<T>& pt3) {
+    CLIPPER2_NO_FP_CONTRACT
     return (static_cast<double>(pt2.x - pt1.x) * static_cast<double>(pt3.x - pt2.x) +
       static_cast<double>(pt2.y - pt1.y) * static_cast<double>(pt3.y - pt2.y));
   }
@@ -819,6 +835,7 @@ namespace Clipper2Lib
   template <typename T>
   inline double DotProduct(const Point<T>& vec1, const Point<T>& vec2)
   {
+    CLIPPER2_NO_FP_CONTRACT
     return static_cast<double>(vec1.x * vec2.x) + static_cast<double>(vec1.y * vec2.y);
   }
 
@@ -832,6 +849,7 @@ namespace Clipper2Lib
   inline double PerpendicDistFromLineSqrd(const Point<T>& pt,
     const Point<T>& line1, const Point<T>& line2)
   {
+    CLIPPER2_NO_FP_CONTRACT
     //perpendicular distance of point (x³,y³) = (Ax³ + By³ + C)/Sqrt(A² + B²)
     //see https://en.wikipedia.org/wiki/Perpendicular_distance
     double a = static_cast<double>(pt.x - line1.x);
@@ -845,6 +863,7 @@ namespace Clipper2Lib
   template <typename T>
   inline double Area(const Path<T>& path)
   {
+    CLIPPER2_NO_FP_CONTRACT
     size_t cnt = path.size();
     if (cnt < 3) return 0.0;
     double a = 0.0;
@@ -898,6 +917,7 @@ namespace Clipper2Lib
   inline bool GetLineIntersectPt(const Point<T>& ln1a, const Point<T>& ln1b,
     const Point<T>& ln2a, const Point<T>& ln2b, Point<T>& ip)
   {
+    CLIPPER2_NO_FP_CONTRACT
     double ln1dy = static_cast<double>(ln1b.y - ln1a.y);
     double ln1dx = static_cast<double>(ln1a.x - ln1b.x);
     double ln2dy = static_cast<double>(ln2b.y - ln2a.y);
@@ -951,6 +971,7 @@ namespace Clipper2Lib
   inline bool GetLineIntersectPt(const Point<T>& seg1a, const Point<T>& seg1b,
     const Point<T>& seg2a, const Point<T>& seg2b, Point<T>& ip)
   {
+    CLIPPER2_NO_FP_CONTRACT
     // integer segments are evaluated from their bottom end, as the sweep does, so that
     // a shared edge rounds to the same point whichever way round it is given
     const bool rev1 = std::is_integral_v<T> &&
@@ -1027,6 +1048,7 @@ namespace Clipper2Lib
   inline bool SegmentsIntersect(const Point64& seg1a, const Point64& seg1b,
     const Point64& seg2a, const Point64& seg2b, bool inclusive = false)
   {
+    CLIPPER2_NO_FP_CONTRACT
     double dy1 = static_cast<double>(seg1b.y - seg1a.y);
     double dx1 = static_cast<double>(seg1b.x - seg1a.x);
     double dy2 = static_cast<double>(seg2b.y - seg2a.y);
@@ -1072,6 +1094,7 @@ namespace Clipper2Lib
   inline Point<T> GetClosestPointOnSegment(const Point<T>& offPt,
     const Point<T>& seg1, const Point<T>& seg2)
   {
+    CLIPPER2_NO_FP_CONTRACT
     if (seg1.x == seg2.x && seg1.y == seg2.y) return seg1;
     double dx = static_cast<double>(seg2.x - seg1.x);
     double dy = static_cast<double>(seg2.y - seg1.y);

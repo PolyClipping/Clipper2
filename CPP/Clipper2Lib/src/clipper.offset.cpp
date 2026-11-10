@@ -10,6 +10,8 @@
 #include "clipper2/clipper.h"
 #include "clipper2/clipper.offset.h"
 
+CLIPPER2_NO_FP_CONTRACT
+
 namespace Clipper2Lib {
 
 const double floating_point_tolerance = 1e-12;

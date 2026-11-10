@@ -613,6 +613,7 @@ namespace Clipper2Lib {
   inline Path<T> Ellipse(const Point<T>& center,
     double radiusX, double radiusY = 0, size_t steps = 0)
   {
+    CLIPPER2_NO_FP_CONTRACT
     if (radiusX <= 0) return Path<T>();
     if (radiusY <= 0) radiusY = radiusX;
     if (steps <= 2)

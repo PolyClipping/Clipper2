@@ -9,4 +9,4 @@ Version: @PROJECT_VERSION@
 URL: https://github.com/PolyClipping/Clipper2
 Requires:
 Libs: -L${libdir} -lClipper2@PCFILE_LIB_SUFFIX@
-Cflags: -I${includedir}@PCFILE_DEFINITIONS@
+Cflags: -I${includedir}@PCFILE_DEFINITIONS@@PCFILE_CFLAGS@
