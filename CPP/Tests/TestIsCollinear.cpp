@@ -51,3 +51,38 @@ TEST(Clipper2Tests, TestIsCollinear2) {
   clipper.Execute(Clipper2Lib::ClipType::Union, Clipper2Lib::FillRule::EvenOdd, solution);
   EXPECT_EQ(solution.size(), 2);
 }
+
+TEST(Clipper2Tests, TestCompareProducts) {
+  using Clipper2Lib::CompareProducts;
+  using Clipper2Lib::MultiplyInt64;
+  // the largest coordinate difference, and two products above 2^64 that differ only in the low word
+  const int64_t m = 2 * Clipper2Lib::MAX_COORD;
+  const int64_t p = (int64_t(1) << 32) + 1;
+  const int64_t q = int64_t(1) << 32;
+
+  EXPECT_EQ(MultiplyInt64(-1, 1).hi, -1);
+  EXPECT_EQ(MultiplyInt64(-1, 1).lo, UINT64_MAX);
+  EXPECT_EQ(MultiplyInt64(INT64_MIN, INT64_MIN).hi, int64_t(1) << 62);
+  EXPECT_EQ(MultiplyInt64(INT64_MIN, INT64_MIN).lo, 0u);
+  EXPECT_EQ(MultiplyInt64(INT64_MIN, INT64_MAX).hi, -(int64_t(1) << 62));
+  EXPECT_EQ(MultiplyInt64(INT64_MIN, INT64_MAX).lo, uint64_t(1) << 63);
+  EXPECT_EQ(MultiplyInt64(-m, m).hi, MultiplyInt64(m, -m).hi);
+  EXPECT_EQ(MultiplyInt64(-m, m).lo, MultiplyInt64(m, -m).lo);
+
+  EXPECT_EQ(CompareProducts(0, m, 0, -m), 0);
+  EXPECT_EQ(CompareProducts(0, 0, -1, 1), 1);
+  EXPECT_EQ(CompareProducts(0, 0, 1, 1), -1);
+  EXPECT_EQ(CompareProducts(m, m, m, m), 0);
+  EXPECT_EQ(CompareProducts(-m, -m, m, m), 0);
+  EXPECT_EQ(CompareProducts(-m, m, m, -m), 0);
+  EXPECT_EQ(CompareProducts(m, m, m, m - 1), 1);
+  EXPECT_EQ(CompareProducts(-m, m, m, 1 - m), -1);
+  EXPECT_EQ(CompareProducts(-m, m, m, m), -1);
+  EXPECT_EQ(CompareProducts(m, m, -m, m), 1);
+  EXPECT_EQ(CompareProducts(p, p, q, q + 2), 1);
+  EXPECT_EQ(CompareProducts(q, q + 2, p, p), -1);
+  EXPECT_EQ(CompareProducts(-p, p, -q, q + 2), -1);
+  EXPECT_EQ(CompareProducts(-p, -p, q, -q - 2), 1);
+  EXPECT_TRUE(Clipper2Lib::ProductsAreEqual(-p, p, p, -p));
+  EXPECT_FALSE(Clipper2Lib::ProductsAreEqual(p, p, q, q + 2));
+}

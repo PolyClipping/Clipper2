@@ -289,6 +289,7 @@ if(CLIPPER2_TESTS)
     Tests/TestPolytreeUnion.cpp
     Tests/TestRandomPaths.cpp
     Tests/TestRectClip.cpp
+    Tests/TestRounding.cpp
     Tests/TestSimplifyPath.cpp
     Tests/TestTrimCollinear.cpp
     Tests/TestWindows.cpp

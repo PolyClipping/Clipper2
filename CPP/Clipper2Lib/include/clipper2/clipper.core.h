@@ -31,6 +31,16 @@
 #define CLIPPER2_NO_FP_CONTRACT
 #endif
 
+#if (defined(__x86_64__) || defined(_M_X64)) && !defined(_M_ARM64EC)
+#include <emmintrin.h>
+#elif defined(_MSC_VER) && !defined(__clang__) && defined(_M_ARM64)
+#include <arm64_neon.h>
+#endif
+
+#if defined(_MSC_VER) && !defined(__clang__) && (defined(_M_X64) || defined(_M_ARM64)) && !defined(_M_ARM64EC)
+#include <intrin.h>
+#endif
+
 namespace Clipper2Lib
 {
 
@@ -707,6 +717,21 @@ namespace Clipper2Lib
     CheckPrecisionRange(precision, error_code);
   }
 
+  // Rounds like std::nearbyint in the current rounding mode, for val within the int64_t range. The
+  // intrinsics may raise FE_INEXACT, and compilers may move them across fesetround calls.
+  inline int64_t RoundToInt64(double val)
+  {
+#if (defined(__x86_64__) || defined(_M_X64)) && !defined(_M_ARM64EC)
+    // std::nearbyint is a library call here unless SSE4.1 is enabled
+    return _mm_cvtsd_si64(_mm_set_sd(val));
+#elif defined(_MSC_VER) && !defined(__clang__) && defined(_M_ARM64)
+    // MSVC calls the CRT for std::nearbyint, where GCC and Clang emit FRINTI
+    return static_cast<int64_t>(vget_lane_f64(vrndi_f64(vdup_n_f64(val)), 0));
+#else
+    return static_cast<int64_t>(std::nearbyint(val));
+#endif
+  }
+
   inline int TriSign(int64_t x) // returns 0, 1 or -1
   {
     return (x > 0) - (x < 0); 
@@ -736,65 +761,68 @@ namespace Clipper2Lib
     return { uint64_t(lo(x3) << 32 | lo(x1)), uint64_t(hi(a) * hi(b) + hi(x2) + hi(x3)) };
   }
 
+  // The signed 128 bit product a * b, split so that (hi, lo) pairs order like the products
+  struct Int128Parts
+  {
+    int64_t hi;
+    uint64_t lo;
+  };
+
+  inline Int128Parts MultiplyInt64(int64_t a, int64_t b)
+  {
+#if defined(__SIZEOF_INT128__)
+    const __int128_t p = static_cast<__int128_t>(a) * b;
+    return { static_cast<int64_t>(p >> 64), static_cast<uint64_t>(p) };
+#elif defined(_MSC_VER) && defined(_M_X64) && !defined(_M_ARM64EC)
+    // MSVC has no 128 bit integer type, but IMUL gives the full product
+    int64_t hi;
+    const int64_t lo = _mul128(a, b, &hi);
+    return { hi, static_cast<uint64_t>(lo) };
+#elif defined(_MSC_VER) && defined(_M_ARM64)
+    // SMULH gives the high half, and the low half is the same for signed and unsigned operands
+    return { __mulh(a, b), static_cast<uint64_t>(a) * static_cast<uint64_t>(b) };
+#else
+    // a negative operand read as unsigned adds 2^64 to it, so the other operand comes off the high half
+    const UInt128Struct p = MultiplyUInt64(static_cast<uint64_t>(a), static_cast<uint64_t>(b));
+    uint64_t hi = p.hi;
+
+    if (a < 0) hi -= static_cast<uint64_t>(b);
+
+    if (b < 0) hi -= static_cast<uint64_t>(a);
+
+    return { static_cast<int64_t>(hi), p.lo };
+#endif
+  }
+
+  // returns 1, 0 or -1 as a * b is greater than, equal to or less than c * d
+  inline int CompareProducts(int64_t a, int64_t b, int64_t c, int64_t d)
+  {
+#if defined(__SIZEOF_INT128__)
+    // GCC and Clang compare whole __int128 values faster than the split halves
+    const __int128_t ab = static_cast<__int128_t>(a) * b;
+    const __int128_t cd = static_cast<__int128_t>(c) * d;
+    return (ab > cd) ? 1 : (ab < cd) ? -1 : 0;
+#else
+    const Int128Parts ab = MultiplyInt64(a, b);
+    const Int128Parts cd = MultiplyInt64(c, d);
+
+    if (ab.hi != cd.hi) return (ab.hi > cd.hi) ? 1 : -1;
+
+    return (ab.lo > cd.lo) ? 1 : (ab.lo < cd.lo) ? -1 : 0;
+#endif
+  }
+
   // returns true if (and only if) a * b == c * d
   inline bool ProductsAreEqual(int64_t a, int64_t b, int64_t c, int64_t d)
   {
-#if (defined(__clang__) || defined(__GNUC__)) && UINTPTR_MAX >= UINT64_MAX
-    const auto ab = static_cast<__int128_t>(a) * static_cast<__int128_t>(b);
-    const auto cd = static_cast<__int128_t>(c) * static_cast<__int128_t>(d);
-    return ab == cd;
-#else
-    // nb: unsigned values needed for calculating overflow carry
-    const auto abs_a = static_cast<uint64_t>(std::abs(a));
-    const auto abs_b = static_cast<uint64_t>(std::abs(b));
-    const auto abs_c = static_cast<uint64_t>(std::abs(c));
-    const auto abs_d = static_cast<uint64_t>(std::abs(d));
-
-    const auto ab = MultiplyUInt64(abs_a, abs_b);
-    const auto cd = MultiplyUInt64(abs_c, abs_d);
-
-    // nb: it's important to differentiate 0 values here from other values
-    const auto sign_ab = TriSign(a) * TriSign(b);
-    const auto sign_cd = TriSign(c) * TriSign(d);
-
-    return ab == cd && sign_ab == sign_cd;
-#endif
+    return CompareProducts(a, b, c, d) == 0;
   }
 
   template <typename T>
   inline int CrossProductSign(const Point<T>& pt1, const Point<T>& pt2, const Point<T>& pt3)
   {
-    const auto a = pt2.x - pt1.x;
-    const auto b = pt3.y - pt2.y;
-    const auto c = pt2.y - pt1.y;
-    const auto d = pt3.x - pt2.x;
-
-#if (defined(__clang__) || defined(__GNUC__)) && UINTPTR_MAX >= UINT64_MAX
-    const auto ab = static_cast<__int128_t>(a) * static_cast<__int128_t>(b);
-    const auto cd = static_cast<__int128_t>(c) * static_cast<__int128_t>(d);
-    if (ab > cd) return 1;
-    else if (ab < cd) return -1;
-    else return 0;
-#else
-    const auto ab = MultiplyUInt64(std::abs(a), std::abs(b));
-    const auto cd = MultiplyUInt64(std::abs(c), std::abs(d));
-
-    const auto sign_ab = TriSign(a) * TriSign(b);
-    const auto sign_cd = TriSign(c) * TriSign(d);
-
-    if (sign_ab == sign_cd)
-    {
-      int result;
-      if (ab.hi == cd.hi)
-      {
-        if (ab.lo == cd.lo) return 0;
-        result = (ab.lo > cd.lo) ? 1 : -1;
-      }
-      else result = (ab.hi > cd.hi) ? 1 : -1;
-      return (sign_ab > 0) ? result : -result;
-    }
-    return (sign_ab > sign_cd) ? 1 : -1;
-#endif
+    return CompareProducts(static_cast<int64_t>(pt2.x - pt1.x), static_cast<int64_t>(pt3.y - pt2.y),
+      static_cast<int64_t>(pt2.y - pt1.y), static_cast<int64_t>(pt3.x - pt2.x));
   }
 
   template <typename T>
@@ -1116,8 +1144,8 @@ namespace Clipper2Lib
 
       if constexpr (std::is_integral_v<T>)
       {
-        ip.x = static_cast<T>(std::clamp<O>(origin_x + static_cast<O>(nearbyint(local_x)), min_x, max_x));
-        ip.y = static_cast<T>(std::clamp<O>(origin_y + static_cast<O>(nearbyint(local_y)), min_y, max_y));
+        ip.x = static_cast<T>(std::clamp<O>(origin_x + static_cast<O>(RoundToInt64(local_x)), min_x, max_x));
+        ip.y = static_cast<T>(std::clamp<O>(origin_y + static_cast<O>(RoundToInt64(local_y)), min_y, max_y));
       }
       else
       {
@@ -1130,8 +1158,8 @@ namespace Clipper2Lib
       // rounding the absolute value resolves an exact tie the same way for any segment
       if constexpr (std::is_integral_v<T>)
       {
-        ip.x = static_cast<T>(nearbyint(ln1a.x + t * dx1));
-        ip.y = static_cast<T>(nearbyint(ln1a.y + t * dy1));
+        ip.x = static_cast<T>(RoundToInt64(ln1a.x + t * dx1));
+        ip.y = static_cast<T>(RoundToInt64(ln1a.y + t * dy1));
       }
       else
       {
@@ -1235,8 +1263,8 @@ namespace Clipper2Lib
     if (q < 0) q = 0; else if (q > 1) q = 1;
     if constexpr (std::is_integral_v<T>)
       return Point<T>(
-        seg1.x + static_cast<T>(nearbyint(q * dx)),
-        seg1.y + static_cast<T>(nearbyint(q * dy)));
+        seg1.x + static_cast<T>(RoundToInt64(q * dx)),
+        seg1.y + static_cast<T>(RoundToInt64(q * dy)));
     else
       return Point<T>(
         seg1.x + static_cast<T>(q * dx),

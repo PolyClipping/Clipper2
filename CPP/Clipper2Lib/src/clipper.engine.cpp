@@ -11,16 +11,6 @@
 #include "clipper2/clipper.h"
 #include <stdexcept>
 
-// https://github.com/AngusJohnson/Clipper2/discussions/334
-// #discussioncomment-4248602
-#if defined(_MSC_VER) && ( defined(_M_AMD64) || defined(_M_X64) )
-#include <xmmintrin.h>
-#include <emmintrin.h>
-#define fmin(a,b) _mm_cvtsd_f64(_mm_min_sd(_mm_set_sd(a),_mm_set_sd(b)))
-#define fmax(a,b) _mm_cvtsd_f64(_mm_max_sd(_mm_set_sd(a),_mm_set_sd(b)))
-#define nearbyint(a) _mm_cvtsd_si64(_mm_set_sd(a)) /* Note: expression type is (int64_t) */
-#endif
-
 CLIPPER2_NO_FP_CONTRACT
 
 namespace Clipper2Lib {
@@ -130,7 +120,7 @@ namespace Clipper2Lib {
   {
     if ((currentY == ae.top.y) || (ae.top.x == ae.bot.x)) return ae.top.x;
     else if (currentY == ae.bot.y) return ae.bot.x;
-    else return ae.bot.x + static_cast<int64_t>(nearbyint(ae.dx * (currentY - ae.bot.y)));
+    else return ae.bot.x + RoundToInt64(ae.dx * (currentY - ae.bot.y));
     // nb: std::nearbyint (or std::round) substantially *improves* performance here
     // as it greatly improves the likelihood of edge adjacency in ProcessIntersectList().
   }
