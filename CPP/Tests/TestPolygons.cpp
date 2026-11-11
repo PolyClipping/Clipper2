@@ -205,6 +205,20 @@ TEST(Clipper2Tests, TestHorzSpikes) //#720
   EXPECT_GE(paths.size(), 1);
 }
 
+TEST(Clipper2Tests, TestUnionKeepsIntersectionInScanbeam)
+{
+  // the clip edge leaving -28785,-61 starts almost on the subject's flat edge, so their intersection
+  // is computed just below the scanbeam, and clamping it used to leave it 6 units before that vertex
+  Clipper2Lib::Paths64 subject = { Clipper2Lib::MakePath({ -69425,73, -33569,-35, -24000,-87 }) };
+  Clipper2Lib::Paths64 clip = {
+    Clipper2Lib::MakePath({ -3862,183, -33569,-35, -28785,-61, -26393,-75, -24000,-87 }) };
+  Clipper2Lib::Paths64 solution = Clipper2Lib::Union(subject, clip, Clipper2Lib::FillRule::EvenOdd);
+
+  ASSERT_EQ(solution.size(), 1);
+  EXPECT_EQ(solution[0].size(), 4);
+  EXPECT_EQ(Clipper2Lib::Area(solution), 2230933);
+}
+
 TEST(Clipper2Tests, TestCollinearOnMacOs) //#777
 {
   Clipper2Lib::Paths64 subject;

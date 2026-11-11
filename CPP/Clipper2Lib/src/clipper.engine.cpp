@@ -2396,17 +2396,16 @@ namespace Clipper2Lib {
     {
       double abs_dx1 = std::fabs(e1.dx);
       double abs_dx2 = std::fabs(e2.dx);
-      if (abs_dx1 > 100 && abs_dx2 > 100)
+
+      if (abs_dx1 > 100 || abs_dx2 > 100)
       {
-        if (abs_dx1 > abs_dx2)
-          ip = GetClosestPointOnSegment(ip, e1.bot, e1.top);
-        else
-          ip = GetClosestPointOnSegment(ip, e2.bot, e2.top);
+        //move onto the flatter edge, using only its part inside the scanbeam since
+        //near parallel edges can meet far beyond it
+        const Active& e = (abs_dx1 > abs_dx2) ? e1 : e2;
+        ip = GetClosestPointOnSegment(ip, Point64(TopX(e, bot_y_), bot_y_), Point64(TopX(e, top_y), top_y));
+        //the projection is rounded in double, which can overshoot with huge coordinates
+        ip.y = std::clamp(ip.y, top_y, bot_y_);
       }
-      else if (abs_dx1 > 100)
-        ip = GetClosestPointOnSegment(ip, e1.bot, e1.top);
-      else if (abs_dx2 > 100)
-        ip = GetClosestPointOnSegment(ip, e2.bot, e2.top);
       else
       {
         if (ip.y < top_y) ip.y = top_y;
@@ -2415,6 +2414,7 @@ namespace Clipper2Lib {
         else ip.x = TopX(e2, ip.y);
       }
     }
+
     intersect_nodes_.emplace_back(&e1, &e2, ip);
   }
 
