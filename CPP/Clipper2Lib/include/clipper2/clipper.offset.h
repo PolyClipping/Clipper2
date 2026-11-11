@@ -35,11 +35,22 @@ private:
 	class Group {
 	public:
 		Paths64 paths_in;
-    std::optional<size_t> lowest_path_idx{};
+		// a path's area, exactly, as its sign and the high and low halves of twice its magnitude
+		struct ExactArea
+		{
+			int sign = 0;
+			std::pair<uint64_t, uint64_t> twice_magnitude;
+			explicit ExactArea(const Path64& path);
+		};
+		std::vector<ExactArea> areas; // of each path in a polygon group
+		size_t outer_idx = 0; // the largest closed path
+		int outer_sign = 0; // sign of the largest closed path's area, 0 if none
+		std::vector<bool> is_stray; // holes no outer encloses, empty if there are none
 		bool is_reversed = false;
 		JoinType join_type;
 		EndType end_type;
 		Group(const Paths64& _paths, JoinType _join_type, EndType _end_type);
+		bool IsStray(size_t path_idx) const { return !is_stray.empty() && is_stray[path_idx]; }
 	};
 
 	int   error_code_ = 0;
@@ -68,7 +79,7 @@ private:
 #endif
 	DeltaCallback64 deltaCallback64_ = nullptr;
 	size_t CalcSolutionCapacity();
-	bool CheckReverseOrientation();
+	void SetGroupOrientations();
 	void DoBevel(const Path64& path, size_t j, size_t k);
 	void DoSquare(const Path64& path, size_t j, size_t k);
 	void DoMiter(const Path64& path, size_t j, size_t k, double cos_a);
@@ -80,6 +91,8 @@ private:
 	void OffsetOpenPath(Group& group, const Path64& path, EndType end_type);
 	void OffsetPoint(Group& group, const Path64& path, size_t j, size_t k);
 	void DoGroupOffset(Group &group);
+	void InitClipper(Clipper64& c);
+	void KeepGrownRegions();
 	void ExecuteInternal(double delta);
 public:
 	explicit ClipperOffset(double miter_limit = 2.0,

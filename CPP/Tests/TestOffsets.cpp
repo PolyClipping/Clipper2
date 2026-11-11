@@ -580,7 +580,7 @@ TEST(Clipper2Tests, TestOffsets8) // (#724)
 
 TEST(Clipper2Tests, TestOffsets9) // (#733)
 {
-  // solution orientations should match subject orientations UNLESS
+  // solutions are positive whatever the subject's orientation, UNLESS
   // reverse_solution is set true in ClipperOffset's constructor
   // start subject's orientation positive ...
   Paths64 subject{ MakePath({100,100, 200,100, 200, 400, 100, 400}) };
@@ -593,24 +593,24 @@ TEST(Clipper2Tests, TestOffsets9) // (#733)
   solution = InflatePaths(subject, 50, JoinType::Miter, EndType::Polygon);
   EXPECT_EQ(solution.size(), 1);
   EXPECT_TRUE(std::fabs(Area(solution[0])) > std::fabs(Area(subject[0])));
-  EXPECT_FALSE(IsPositive(solution[0]));
+  EXPECT_TRUE(IsPositive(solution[0]));
   ClipperOffset co(2, 0, false, true); // last param. reverses solution
   co.AddPaths(subject, JoinType::Miter, EndType::Polygon);
   co.Execute(50, solution);
   EXPECT_EQ(solution.size(), 1);
   EXPECT_TRUE(std::fabs(Area(solution[0])) > std::fabs(Area(subject[0])));
-  EXPECT_TRUE(IsPositive(solution[0]));
+  EXPECT_FALSE(IsPositive(solution[0]));
   // add a hole (ie has reverse orientation to outer path)
   subject.push_back( MakePath({130,130, 170,130, 170,370, 130,370}) );
   solution = InflatePaths(subject, 30, JoinType::Miter, EndType::Polygon);
   EXPECT_EQ(solution.size(), 1);
-  EXPECT_FALSE(IsPositive(solution[0]));
+  EXPECT_TRUE(IsPositive(solution[0]));
   co.Clear(); // should still reverse solution orientation
   co.AddPaths(subject, JoinType::Miter, EndType::Polygon);
   co.Execute(30, solution);
   EXPECT_EQ(solution.size(), 1);
   EXPECT_TRUE(std::fabs(Area(solution[0])) > std::fabs(Area(subject[0])));
-  EXPECT_TRUE(IsPositive(solution[0]));
+  EXPECT_FALSE(IsPositive(solution[0]));
   solution = InflatePaths(subject, -15, JoinType::Miter, EndType::Polygon);
   EXPECT_EQ(solution.size(), 0);
 }
@@ -692,11 +692,11 @@ TEST(Clipper2Tests, TestOffsets13) // see #965
 
   const Paths64 subjects2 = {
    subject1,
-   {{0, 20}} // adding this single-point path should not really change the solution
+   {{0, 20}} // adding this single-point path must not change how the triangle is offset
   };
   const Paths64 solution2 = InflatePaths(subjects2, delta, joinType, endType);
   const auto area2 = std::abs(Area(solution2));
-  EXPECT_EQ(area2, 122);
+  EXPECT_EQ(area2, 122 + 16); // the point becomes a separate 4x4 square
 }
 
 TEST(Clipper2Tests, TestOffsetsJoinedTwoPointPathOrder)
@@ -712,7 +712,7 @@ TEST(Clipper2Tests, TestOffsetsJoinedTwoPointPathOrder)
 
 TEST(Clipper2Tests, TestOffsetsDegenerateGroupKeepsDeltaSign)
 {
-  // a polygon group without a closed path is always inflated, but later groups must still shrink
+  // a polygon group without a closed path must not change the delta of later groups
   const Path64 line = { {0, 500}, {100, 500} };
   const Path64 square = { {0, 0}, {100, 0}, {100, 100}, {0, 100} };
 
@@ -785,7 +785,7 @@ TEST(Clipper2Tests, TestOffsetsEmptyOpenPath)
 
 TEST(Clipper2Tests, TestOffsetsEmptyGroupOrientation)
 {
-  // an empty group has no orientation and must not decide the orientation of the solution
+  // an empty group in front of a clockwise polygon must not empty the solution
   const Path64 clockwise_square = { {0, 0}, {0, 100}, {100, 100}, {100, 0} };
 
   ClipperOffset offset;
@@ -793,7 +793,7 @@ TEST(Clipper2Tests, TestOffsetsEmptyGroupOrientation)
   offset.AddPath(clockwise_square, JoinType::Miter, EndType::Polygon);
   Paths64 solution;
   offset.Execute(10, solution);
-  EXPECT_EQ(Area(solution), -14400);
+  EXPECT_EQ(Area(solution), 14400);
 }
 
 #ifdef USINGZ
@@ -813,3 +813,109 @@ TEST(Clipper2Tests, TestOffsetsSquareJoinKeepsZ)
   }
 }
 #endif
+
+TEST(Clipper2Tests, TestOffsetsOpenPathBesideClockwisePolygon)
+{
+  // every group's outers are wound positively, so an open path is kept beside a clockwise polygon
+  ClipperOffset offset;
+  offset.AddPath({ {0, 0}, {0, 100}, {100, 100}, {100, 0} }, JoinType::Miter, EndType::Polygon);
+  offset.AddPath({ {0, 500}, {100, 500} }, JoinType::Miter, EndType::Butt);
+  Paths64 solution;
+  offset.Execute(10, solution);
+  EXPECT_EQ(Area(solution), 120 * 120 + 100 * 20);
+}
+
+TEST(Clipper2Tests, TestOffsetsReversedGroupSinglePoint)
+{
+  // a clockwise group must offset its points exactly as a counter-clockwise group does
+  const Path64 square = { {0, 0}, {100, 0}, {100, 100}, {0, 100} };
+  const Path64 clockwise_square = { {0, 0}, {0, 100}, {100, 100}, {100, 0} };
+  const Path64 point = { {500, 500} };
+
+  for (double delta : { 10.0, -10.0 })
+  {
+    const Paths64 expected = InflatePaths(Paths64{ square, point }, delta, JoinType::Miter, EndType::Polygon);
+    const Paths64 solution = InflatePaths(Paths64{ clockwise_square, point }, delta, JoinType::Miter,
+      EndType::Polygon);
+    EXPECT_EQ(solution.size(), expected.size());
+    EXPECT_EQ(Area(solution), Area(expected));
+  }
+}
+
+TEST(Clipper2Tests, TestOffsetsDegeneratePathsFollowDeltaSign)
+{
+  // points and lines have no area, so a positive delta grows them and a negative one erodes them away
+  const Path64 point = { {500, 500} };
+  const Path64 line = { {500, 500}, {600, 500} };
+  const Path64 square = { {0, 0}, {100, 0}, {100, 100}, {0, 100} };
+  const Path64 inner_line = { {30, 50}, {70, 50} };
+
+  EXPECT_EQ(Area(InflatePaths(Paths64{ point }, 10, JoinType::Miter, EndType::Polygon)), 400);
+  EXPECT_EQ(Area(InflatePaths(Paths64{ line }, 10, JoinType::Miter, EndType::Polygon)), 2400);
+  EXPECT_TRUE(InflatePaths(Paths64{ point }, -10, JoinType::Miter, EndType::Polygon).empty());
+  EXPECT_TRUE(InflatePaths(Paths64{ line }, -10, JoinType::Miter, EndType::Polygon).empty());
+  EXPECT_TRUE(InflatePaths(PathsD{ { {5.0, 5.0} } }, -1, JoinType::Miter, EndType::Polygon).empty());
+
+  // open paths are offset by their width, whatever the sign
+  EXPECT_EQ(Area(InflatePaths(Paths64{ point }, -10, JoinType::Miter, EndType::Square)), 400);
+  EXPECT_EQ(Area(InflatePaths(Paths64{ line }, -10, JoinType::Miter, EndType::Square)), 2400);
+
+  // a bow-tie has no net area but is not flat, so it keeps growing as before
+  const Path64 bow_tie = { {0, 0}, {100, 100}, {0, 100}, {100, 0} };
+  EXPECT_EQ(Area(InflatePaths(Paths64{ bow_tie }, -10, JoinType::Miter, EndType::Polygon)), 5750);
+  EXPECT_EQ(Area(InflatePaths(Paths64{ square, inner_line }, -10, JoinType::Miter, EndType::Polygon)),
+    Area(InflatePaths(Paths64{ square }, -10, JoinType::Miter, EndType::Polygon)));
+
+  // this hole's area rounds to zero in floating point, but it is not flat and must survive
+  const Path64 outer = { {-100, 999999900}, {10000101, 999999900}, {10000101, 1010000100}, {-100, 1010000100} };
+  const Path64 hole = { {10000001, 1010000000}, {10000000, 1009999999}, {0, 1000000000} };
+  EXPECT_EQ(InflatePaths(Paths64{ outer, hole }, -10, JoinType::Miter, EndType::Polygon).size(), 2);
+}
+
+TEST(Clipper2Tests, TestOffsetsDegeneratePathCallbackKeepsGrowth)
+{
+  // the line grows at one end and erodes at the other, and its eroded end must not cut into the square
+  const Path64 line = { {0, 0}, {100, 0} };
+  const Path64 square = { {-50, -50}, {150, -50}, {150, 50}, {-50, 50} };
+  DeltaCallback64 delta_cb = [](const Path64& path, const PathD&, size_t curr_idx, size_t) {
+    if (path.size() != 2) return 0.0;
+
+    return (curr_idx == 0) ? -20.0 : 10.0;
+  };
+
+  for (JoinType join_type : { JoinType::Miter, JoinType::Square, JoinType::Bevel, JoinType::Round })
+  {
+    ClipperOffset co;
+    co.AddPaths(Paths64{ square, line }, join_type, EndType::Polygon);
+    Paths64 solution;
+    co.Execute(delta_cb, solution);
+    EXPECT_EQ(Area(solution), Area(square));
+
+    // alone, the grown end survives
+    co.Clear();
+    co.AddPath(line, join_type, EndType::Polygon);
+    co.Execute(delta_cb, solution);
+    EXPECT_GT(Area(solution), 0);
+  }
+}
+
+TEST(Clipper2Tests, TestOffsetsInsignificantDeltaDropsOpenPaths)
+{
+  // an open path offset by less than half a unit has no width, so it must not be closed into a polygon
+  const Path64 open_path = { {200, 0}, {300, 0}, {300, 100} };
+  const Path64 square = { {0, 0}, {100, 0}, {100, 100}, {0, 100} };
+
+  for (EndType end_type : { EndType::Joined, EndType::Butt, EndType::Square, EndType::Round })
+  {
+    EXPECT_TRUE(InflatePaths(Paths64{ open_path }, 0.3, JoinType::Miter, end_type).empty());
+    EXPECT_TRUE(InflatePaths(Paths64{ open_path }, 0, JoinType::Miter, end_type).empty());
+    EXPECT_TRUE(InflatePaths(PathsD{ { {2, 0}, {3, 0}, {3, 1} } }, 0, JoinType::Miter, end_type).empty());
+
+    ClipperOffset co;
+    co.AddPath(square, JoinType::Miter, EndType::Polygon);
+    co.AddPath(open_path, JoinType::Miter, end_type);
+    Paths64 solution;
+    co.Execute(0.3, solution);
+    EXPECT_EQ(solution, InflatePaths(Paths64{ square }, 0.3, JoinType::Miter, EndType::Polygon));
+  }
+}

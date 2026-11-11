@@ -35,28 +35,56 @@ const double arc_const = 0.002; // <-- 1/500
 // Miscellaneous methods
 //------------------------------------------------------------------------------
 
-void GetLowestClosedPathInfo(const Paths64& paths, std::optional<size_t>& idx, bool& is_neg_area)
+// adds a * b, or subtracts it, to the 128-bit two's complement value hi:lo, wrapping around
+static void AddProduct(uint64_t& hi, uint64_t& lo, int64_t a, int64_t b, bool subtract)
 {
-	idx.reset();
-	Point64 botPt = Point64(INT64_MAX, INT64_MIN);
-	for (size_t i = 0; i < paths.size(); ++i)
+	const uint64_t ua = static_cast<uint64_t>(a), ub = static_cast<uint64_t>(b);
+	const UInt128Struct product = MultiplyUInt64(ua, ub);
+	uint64_t product_lo = product.lo;
+	// corrects the unsigned product to the signed one, modulo 2^128
+	uint64_t product_hi = product.hi - (a < 0 ? ub : 0) - (b < 0 ? ua : 0);
+
+	if (subtract)
 	{
-		double a = MAX_DBL;
-		for (const Point64& pt : paths[i])
-		{
-			if ((pt.y < botPt.y) ||
-				((pt.y == botPt.y) && (pt.x >= botPt.x))) continue;
-			if (a == MAX_DBL) 
-			{
-				a = Area(paths[i]);
-				if (a == 0) break; // invalid closed path, so break from inner loop
-				is_neg_area = a < 0;
-			}
-      idx = i;
-			botPt.x = pt.x;
-			botPt.y = pt.y;
-		}
+		product_lo = ~product_lo + 1;
+		product_hi = ~product_hi + (product_lo == 0 ? 1 : 0);
 	}
+
+	lo += product_lo;
+	hi += product_hi + (lo < product_lo ? 1 : 0);
+}
+
+// true when path lies inside a container, judged by the first of its vertices that locate
+// doesn't put on the container's edge. A path touching it at every vertex counts as inside.
+template <typename Locate>
+static bool IsInside(const Path64& path, Locate locate)
+{
+	for (const Point64& pt : path)
+	{
+		PointInPolygonResult pip = locate(pt);
+
+		if (pip != PointInPolygonResult::IsOn) return pip == PointInPolygonResult::IsInside;
+	}
+
+	return true;
+}
+
+// true when any vertex of path is inside a container, or all of them are on its edge
+template <typename Locate>
+static bool HasVertexInside(const Path64& path, Locate locate)
+{
+	bool all_on = true;
+
+	for (const Point64& pt : path)
+	{
+		PointInPolygonResult pip = locate(pt);
+
+		if (pip == PointInPolygonResult::IsInside) return true;
+
+		if (pip == PointInPolygonResult::IsOutside) all_on = false;
+	}
+
+	return all_on;
 }
 
 inline double Hypot(double x, double y)
@@ -103,6 +131,18 @@ inline bool IsClosedPath(EndType et)
 	return et == EndType::Polygon || et == EndType::Joined;
 }
 
+// true when every vertex lies on one line, so the path encloses no area
+static bool IsFlat(const Path64& path)
+{
+	auto it = std::find_if(path.cbegin(), path.cend(), [&](const Point64& pt) { return pt != path[0]; });
+
+	if (it == path.cend()) return true;
+
+	const Point64& pt1 = *it;
+	return std::all_of(it + 1, path.cend(),
+		[&](const Point64& pt) { return CrossProductSign(path[0], pt1, pt) == 0; });
+}
+
 static inline Point64 GetPerpendic(const Point64& pt, const PointD& norm, double delta)
 {
 #ifdef USINGZ
@@ -134,6 +174,207 @@ inline void NegatePath(PathD& path)
 }
 
 
+// A static R-tree, packed by sorting the boxes into tiles. Tiling by rank rather than by
+// coordinate keeps it balanced however the boxes cluster. Boxes can be marked active, and each
+// node counts its active boxes, so a query for active boxes skips whole subtrees of the others.
+class BoundsTree
+{
+public:
+	explicit BoundsTree(std::vector<Rect64> boxes) : boxes_(std::move(boxes)), is_active_(boxes_.size())
+	{
+		std::vector<Rect64> rects = boxes_;
+
+		while (!rects.empty())
+		{
+			Level level;
+			level.items = TileOrder(rects);
+			level.parents.resize(rects.size());
+			std::vector<Rect64> node_rects;
+
+			for (size_t first = 0; first < level.items.size(); first += node_size)
+			{
+				Node node{ InvalidRect64, first, (std::min)(node_size, level.items.size() - first), 0 };
+
+				for (size_t i = first; i < first + node.count; ++i)
+				{
+					const Rect64& r = rects[level.items[i]];
+					node.bounds.left = (std::min)(node.bounds.left, r.left);
+					node.bounds.top = (std::min)(node.bounds.top, r.top);
+					node.bounds.right = (std::max)(node.bounds.right, r.right);
+					node.bounds.bottom = (std::max)(node.bounds.bottom, r.bottom);
+				}
+
+				for (size_t i = first; i < first + node.count; ++i)
+					level.parents[level.items[i]] = level.nodes.size();
+
+				level.nodes.push_back(node);
+				node_rects.push_back(node.bounds);
+			}
+
+			levels_.push_back(std::move(level));
+
+			if (node_rects.size() == 1) break;
+
+			rects = std::move(node_rects);
+		}
+	}
+
+	void SetActive(size_t box, bool is_active)
+	{
+		if (is_active_[box] == is_active) return;
+
+		is_active_[box] = is_active;
+		size_t item = box;
+
+		for (Level& level : levels_)
+		{
+			item = level.parents[item];
+			Node& node = level.nodes[item];
+			node.active_count = is_active ? node.active_count + 1 : node.active_count - 1;
+		}
+	}
+
+	// calls fn with the index of every box that meets, or of every active one, where meets must
+	// also hold for every box enclosing one that it holds for
+	template <typename Meets, typename Fn>
+	void Query(Meets meets, Fn fn, bool active_only = false) const
+	{
+		if (levels_.empty()) return;
+
+		std::vector<std::pair<size_t, size_t>> stack; // level and node
+
+		for (size_t i = 0; i < levels_.back().nodes.size(); ++i)
+			stack.emplace_back(levels_.size() - 1, i);
+
+		while (!stack.empty())
+		{
+			const auto [level_idx, node_idx] = stack.back();
+			stack.pop_back();
+			const Level& level = levels_[level_idx];
+			const Node& node = level.nodes[node_idx];
+
+			if ((active_only && node.active_count == 0) || !meets(node.bounds)) continue;
+
+			for (size_t i = node.first; i < node.first + node.count; ++i)
+			{
+				const size_t item = level.items[i];
+
+				if (level_idx > 0) stack.emplace_back(level_idx - 1, item);
+				else if ((!active_only || is_active_[item]) && meets(boxes_[item])) fn(item);
+			}
+		}
+	}
+
+private:
+	static constexpr size_t node_size = 16;
+	struct Node { Rect64 bounds; size_t first; size_t count; size_t active_count; };
+	// each node covers a run of items, which index the nodes of the level below, or the boxes,
+	// and parents maps each of those to the node covering it
+	struct Level { std::vector<size_t> items; std::vector<size_t> parents; std::vector<Node> nodes; };
+	std::vector<Rect64> boxes_;
+	std::vector<bool> is_active_;
+	std::vector<Level> levels_;
+
+	// sorts by x into vertical slices about as many as there are tiles per slice, then by y
+	static std::vector<size_t> TileOrder(const std::vector<Rect64>& rects)
+	{
+		std::vector<size_t> order(rects.size());
+		std::iota(order.begin(), order.end(), size_t(0));
+		auto mid_x = [&](size_t i) { return rects[i].left / 2.0 + rects[i].right / 2.0; };
+		auto mid_y = [&](size_t i) { return rects[i].top / 2.0 + rects[i].bottom / 2.0; };
+		std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return mid_x(a) < mid_x(b); });
+		const size_t tiles = (rects.size() + node_size - 1) / node_size;
+		const size_t slices = static_cast<size_t>(std::ceil(std::sqrt(static_cast<double>(tiles))));
+		const size_t slice_len = ((tiles + slices - 1) / slices) * node_size;
+
+		for (size_t first = 0; first < order.size(); first += slice_len)
+		{
+			auto last = order.begin() + (std::min)(first + slice_len, order.size());
+			std::sort(order.begin() + first, last, [&](size_t a, size_t b) { return mid_y(a) < mid_y(b); });
+		}
+
+		return order;
+	}
+};
+
+// Locates points in one polygon with the same result as PointInPolygon, but visits only the
+// edges whose bounds hold the point, then those crossing the point's y to its left. The
+// even-odd parity of a point off the edges doesn't depend on which ray counts the crossings.
+class PolygonIndex
+{
+public:
+	explicit PolygonIndex(const Path64& polygon) : polygon_(polygon), edges_(EdgeBounds(polygon)) {}
+
+	PointInPolygonResult Locate(const Point64& pt) const
+	{
+		bool is_on = false;
+
+		edges_.Query([&](const Rect64& r) {
+			return !is_on && r.left <= pt.x && r.right >= pt.x && r.top <= pt.y && r.bottom >= pt.y;
+		}, [&](size_t i) {
+			is_on = CrossProductSign(Vertex(i), Vertex(i + 1), pt) == 0;
+		});
+
+		if (is_on) return PointInPolygonResult::IsOn;
+
+		// with a half-open rule, an edge lying along the ray never crosses it
+		bool is_inside = false;
+
+		edges_.Query([&](const Rect64& r) { return r.left <= pt.x && r.top <= pt.y && r.bottom > pt.y; },
+			[&](size_t i) {
+				const Point64& a = Vertex(i);
+				const Point64& b = Vertex(i + 1);
+				const int d = CrossProductSign(a, b, pt);
+
+				if ((a.y > pt.y) != (b.y > pt.y) && ((a.y < b.y) ? d < 0 : d > 0)) is_inside = !is_inside;
+			});
+
+		return is_inside ? PointInPolygonResult::IsInside : PointInPolygonResult::IsOutside;
+	}
+
+private:
+	const Path64& polygon_;
+	BoundsTree edges_;
+
+	const Point64& Vertex(size_t i) const { return polygon_[(i == polygon_.size()) ? 0 : i]; }
+
+	static std::vector<Rect64> EdgeBounds(const Path64& polygon)
+	{
+		std::vector<Rect64> result;
+		result.reserve(polygon.size());
+
+		for (size_t i = 0; i < polygon.size(); ++i)
+		{
+			const Point64& a = polygon[i];
+			const Point64& b = polygon[(i + 1 == polygon.size()) ? 0 : i + 1];
+			result.emplace_back((std::min)(a.x, b.x), (std::min)(a.y, b.y), (std::max)(a.x, b.x),
+				(std::max)(a.y, b.y));
+		}
+
+		return result;
+	}
+};
+
+// Locates points in a set of polygons. A large polygon gets an edge index on its first use, since
+// many small paths may be tested against it.
+class PolygonLocator
+{
+public:
+	explicit PolygonLocator(size_t count) : indexes_(count) {}
+
+	PointInPolygonResult Locate(const Point64& pt, const Path64& polygon, size_t polygon_idx)
+	{
+		if (polygon.size() < 64) return PointInPolygon(pt, polygon);
+
+		if (!indexes_[polygon_idx]) indexes_[polygon_idx] = std::make_unique<PolygonIndex>(polygon);
+
+		return indexes_[polygon_idx]->Locate(pt);
+	}
+
+private:
+	std::vector<std::unique_ptr<PolygonIndex>> indexes_;
+};
+
 //------------------------------------------------------------------------------
 // ClipperOffset::Group methods
 //------------------------------------------------------------------------------
@@ -151,20 +392,52 @@ ClipperOffset::Group::Group(const Paths64& _paths, JoinType _join_type, EndType 
 	paths_in.erase(std::remove_if(paths_in.begin(), paths_in.end(),
 		[](const Path64& p) { return p.empty(); }), paths_in.end());
 
-	if (end_type == EndType::Polygon)
+	if (end_type != EndType::Polygon) return;
+
+	areas.reserve(paths_in.size());
+
+	for (const Path64& p : paths_in)
+		areas.emplace_back(p);
+
+	// sizes compare exactly, so paths of nearly equal size rank the same however they're wound.
+	// The first path wins a tie.
+	std::pair<uint64_t, uint64_t> largest;
+
+	for (size_t i = 0; i < areas.size(); ++i)
 	{
-		bool is_neg_area;
-		GetLowestClosedPathInfo(paths_in, lowest_path_idx, is_neg_area);
-		// the lowermost path must be an outer path, so if its orientation is negative,
-		// then flag the whole group is 'reversed' (will negate delta etc.)
-		// as this is much more efficient than reversing every path.
-    is_reversed = lowest_path_idx.has_value() && is_neg_area;
+		if (areas[i].twice_magnitude > largest)
+		{
+			largest = areas[i].twice_magnitude;
+			outer_sign = areas[i].sign;
+			outer_idx = i;
+		}
 	}
-	else
+}
+
+ClipperOffset::Group::ExactArea::ExactArea(const Path64& path)
+{
+	// the shoelace sum may wrap around on the way, but it ends exact whenever twice the area fits
+	// in 127 bits, as it does within Clipper's coordinate range unless the path winds around often
+	uint64_t hi = 0, lo = 0;
+
+	for (size_t i = 0, j = path.size() - 1; i < path.size(); j = i++)
 	{
-    lowest_path_idx.reset();
-		is_reversed = false;
+		AddProduct(hi, lo, path[j].x, path[i].y, false);
+		AddProduct(hi, lo, path[i].x, path[j].y, true);
 	}
+
+	if (hi >> 63)
+	{
+		sign = -1;
+		lo = ~lo + 1;
+		hi = ~hi + (lo == 0 ? 1 : 0);
+	}
+	else if (hi || lo)
+	{
+		sign = 1;
+	}
+
+	twice_magnitude = { hi, lo };
 }
 
 //------------------------------------------------------------------------------
@@ -390,8 +663,12 @@ void ClipperOffset::OffsetPolygon(Group& group, const Path64& path)
 {
 	path_out.clear();
 	for (Path64::size_type j = 0, k = path.size() - 1; j < path.size(); k = j, ++j)
-		OffsetPoint(group, path, j, k);	
-    solution->emplace_back(path_out);
+		OffsetPoint(group, path, j, k);
+
+	// a reversed group's outers come out negative, but the solution's outers are always positive
+	if (group.is_reversed) std::reverse(path_out.begin(), path_out.end());
+
+	solution->emplace_back(path_out);
 }
 
 void ClipperOffset::OffsetOpenJoined(Group& group, const Path64& path)
@@ -475,7 +752,7 @@ void ClipperOffset::DoGroupOffset(Group& group)
 	{
 		// a straight path (2 points) can now also be 'polygon' offset
 		// where the ends will be treated as (180 deg.) joins
-		double delta = group.lowest_path_idx.has_value() ? delta_ : std::abs(delta_);
+		double delta = (group.outer_sign != 0) ? delta_ : std::abs(delta_);
 		group_delta_ = (group.is_reversed) ? -delta : delta;
 	}
 	else
@@ -491,20 +768,26 @@ void ClipperOffset::DoGroupOffset(Group& group)
 	Paths64::const_iterator path_in_it = group.paths_in.cbegin();
 	for ( ; path_in_it != group.paths_in.cend(); ++path_in_it)
 	{
+		if (group.IsStray(path_in_it - group.paths_in.cbegin())) continue;
+
 		Path64::size_type pathLen = path_in_it->size();
 		path_out.clear();
 		BuildNormals(*path_in_it);
 
 		if (pathLen == 1) // single point
 		{
+			double point_delta = (group.end_type == EndType::Polygon) ? delta_ : std::abs(delta_);
+
 			if (deltaCallback64_)
 			{
-				group_delta_ = deltaCallback64_(*path_in_it, norms, 0, 0);
-				if (group.is_reversed) group_delta_ = -group_delta_;
+				point_delta = deltaCallback64_(*path_in_it, norms, 0, 0);
+				group_delta_ = (group.is_reversed) ? -point_delta : point_delta;
 				abs_delta = std::fabs(group_delta_);
 			}
 
-			if (group_delta_ < 1) continue;
+			// a point can only grow, so the caller's delta decides and not the group's orientation
+			if (point_delta < 1) continue;
+
 			const Point64& pt = (*path_in_it)[0];
 			//single vertex so build a circle or square ...
 			if (group.join_type == JoinType::Round)
@@ -538,7 +821,18 @@ void ClipperOffset::DoGroupOffset(Group& group)
 		if ((pathLen == 2) && (end_type == EndType::Joined))
 			end_type = (group.join_type == JoinType::Round) ? EndType::Round : EndType::Square;
 
-		if (end_type == EndType::Polygon) OffsetPolygon(group, *path_in_it);
+		if (end_type == EndType::Polygon)
+		{
+			// a path without area can only grow, so a negative delta erodes it to nothing
+			const bool flat = IsFlat(*path_in_it);
+
+			if (flat && !deltaCallback64_ && delta_ < 0) continue;
+
+			OffsetPolygon(group, *path_in_it);
+
+			// a callback can grow some vertices and erode others, so keep only what grew
+			if (flat && deltaCallback64_) KeepGrownRegions();
+		}
 		else if (end_type == EndType::Joined) OffsetOpenJoined(group, *path_in_it);
 		else OffsetOpenPath(group, *path_in_it, end_type);
 	}
@@ -563,14 +857,187 @@ size_t ClipperOffset::CalcSolutionCapacity()
 	return result;
 }
 
-bool ClipperOffset::CheckReverseOrientation()
+void ClipperOffset::SetGroupOrientations()
 {
-	// nb: this assumes there's consistency in orientation between groups,
-	// and groups without a valid closed path have no orientation to offer
-	for (const Group& g : groups_)
-		if (g.lowest_path_idx.has_value()) return g.is_reversed;
+	// a group's outers share the orientation of its largest closed path, which a hole touching
+	// its outer or a stray sliver left by clipping can't outweigh. Flagging groups as 'reversed'
+	// (negating delta etc.) is much more efficient than reversing every path.
+	struct PathRef { std::pair<uint64_t, uint64_t> size; size_t group_idx; size_t path_idx; };
+	std::vector<PathRef> paths;
+	std::vector<Rect64> bounds;
+	std::vector<size_t> group_ends; // where each group's paths end in paths
+	std::vector<size_t> outer_refs(groups_.size()); // each group's largest path in paths
+	bool has_ccw = false, has_cw = false, has_holes = false;
 
-	return false;
+	for (size_t i = 0; i < groups_.size(); ++i)
+	{
+		Group& g = groups_[i];
+		g.is_reversed = g.outer_sign < 0;
+		g.is_stray.clear();
+		has_ccw = has_ccw || (g.outer_sign > 0);
+		has_cw = has_cw || (g.outer_sign < 0);
+
+		for (size_t j = 0; j < g.areas.size(); ++j)
+		{
+			if (g.areas[j].sign == 0) continue;
+
+			has_holes = has_holes || (g.areas[j].sign != g.outer_sign);
+
+			if (j == g.outer_idx) outer_refs[i] = paths.size();
+
+			paths.push_back({ g.areas[j].twice_magnitude, i, j });
+			bounds.push_back(GetBounds(g.paths_in[j]));
+		}
+
+		group_ends.push_back(paths.size());
+	}
+
+	// only a group wound against another can hold that group's holes
+	const bool is_mixed = has_ccw && has_cw;
+
+	if (!is_mixed && !has_holes) return;
+
+	// A group wound against another holds that group's holes when its largest path lies inside one
+	// of that group's outers, and the innermost enclosing path decides, so a group inside another
+	// group's hole stays an island. A hole that no outer at least as large encloses is stray and
+	// contributes nothing, since offsetting it alone would leave the loops its concave joins add.
+	// Each decision depends only on paths at least as large, so settling from the largest path down,
+	// with a group's own largest path first among equals, settles everything in one pass whatever
+	// the AddPaths order. Without mixed orientations no group turns into holes, so any order will do.
+	std::vector<size_t> order(paths.size());
+	std::iota(order.begin(), order.end(), size_t(0));
+
+	if (is_mixed)
+	{
+		std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+			if (paths[a].size != paths[b].size) return paths[a].size > paths[b].size;
+
+			return paths[a].path_idx == groups_[paths[a].group_idx].outer_idx &&
+				paths[b].path_idx != groups_[paths[b].group_idx].outer_idx;
+		});
+	}
+
+	auto path_of = [&](size_t i) -> const Path64& { return groups_[paths[i].group_idx].paths_in[paths[i].path_idx]; };
+	auto sign_of = [&](size_t i) { return groups_[paths[i].group_idx].areas[paths[i].path_idx].sign; };
+	auto is_outer = [&](size_t i) { return (sign_of(i) < 0) == groups_[paths[i].group_idx].is_reversed; };
+
+	// the outers are active, so a hole looking for one skips the holes around it. Holes inside
+	// their own group's outer don't need the tree at all.
+	std::optional<BoundsTree> tree;
+
+	auto get_tree = [&]() -> BoundsTree& {
+		if (tree) return *tree;
+
+		tree.emplace(bounds);
+
+		for (size_t i = 0; i < paths.size(); ++i)
+			tree->SetActive(i, is_outer(i));
+
+		return *tree;
+	};
+
+	PolygonLocator locator(paths.size());
+	std::vector<size_t> enclosers;
+
+	auto locate_in = [&](size_t i) {
+		return [&, i](const Point64& pt) { return locator.Locate(pt, path_of(i), i); };
+	};
+
+	for (size_t k : order)
+	{
+		const size_t group_idx = paths[k].group_idx;
+		Group& g = groups_[group_idx];
+		const Path64& path = path_of(k);
+		const Rect64& path_bounds = bounds[k];
+
+		if (paths[k].path_idx == g.outer_idx)
+		{
+			if (!is_mixed) continue;
+
+			enclosers.clear();
+
+			get_tree().Query([&](const Rect64& r) { return r.Contains(path_bounds); }, [&](size_t i) {
+				if (paths[i].group_idx != group_idx && paths[i].size > paths[k].size &&
+					!groups_[paths[i].group_idx].IsStray(paths[i].path_idx))
+					enclosers.push_back(i);
+			});
+
+			// a heap, since only the smallest few enclosers are usually needed
+			auto larger = [&](size_t a, size_t b) { return paths[a].size > paths[b].size; };
+			std::make_heap(enclosers.begin(), enclosers.end(), larger);
+			size_t innermost = paths.size();
+			bool is_hole = false;
+
+			while (!enclosers.empty())
+			{
+				std::pop_heap(enclosers.begin(), enclosers.end(), larger);
+				const size_t i = enclosers.back();
+				enclosers.pop_back();
+
+				if (innermost < paths.size() && paths[i].size > paths[innermost].size) break;
+
+				if (!IsInside(path, locate_in(i))) continue;
+
+				innermost = i;
+
+				// the enclosing path must be one of its group's outers, wound against this group
+				if (is_outer(i) && sign_of(i) != g.outer_sign) is_hole = true;
+			}
+
+			if (!is_hole) continue;
+
+			g.is_reversed = !g.is_reversed;
+
+			for (size_t i = group_idx ? group_ends[group_idx - 1] : 0; i < group_ends[group_idx]; ++i)
+				get_tree().SetActive(i, is_outer(i));
+
+			continue;
+		}
+
+		if (is_outer(k)) continue;
+
+		// a hole with a vertex inside an outer counts as enclosed, so one poking out still cuts it
+		const size_t own_outer = outer_refs[group_idx];
+		bool is_enclosed = is_outer(own_outer) && HasVertexInside(path, locate_in(own_outer));
+
+		if (!is_enclosed)
+		{
+			get_tree().Query([&](const Rect64& r) { return !is_enclosed && r.Intersects(path_bounds); }, [&](size_t i) {
+				if (paths[i].size >= paths[k].size) is_enclosed = HasVertexInside(path, locate_in(i));
+			}, true);
+		}
+
+		if (is_enclosed) continue;
+
+		if (g.is_stray.empty()) g.is_stray.resize(g.paths_in.size());
+
+		g.is_stray[paths[k].path_idx] = true;
+	}
+}
+
+void ClipperOffset::InitClipper(Clipper64& c)
+{
+	c.PreserveCollinear(preserve_collinear_);
+#ifdef USINGZ
+	auto fp = std::bind(&ClipperOffset::ZCB, this, std::placeholders::_1,
+		std::placeholders::_2, std::placeholders::_3,
+		std::placeholders::_4, std::placeholders::_5);
+	c.SetZCallback(fp);
+#endif
+}
+
+void ClipperOffset::KeepGrownRegions()
+{
+	// growth is always wound positively, so a positive union removes the eroded regions
+	Clipper64 c;
+	InitClipper(c);
+	c.AddSubject(Paths64{ std::move(solution->back()) });
+	solution->pop_back();
+	Paths64 grown;
+	c.Execute(ClipType::Union, FillRule::Positive, grown);
+
+	for (Path64& path : grown)
+		solution->push_back(std::move(path));
 }
 
 void ClipperOffset::ExecuteInternal(double delta)
@@ -578,6 +1045,7 @@ void ClipperOffset::ExecuteInternal(double delta)
 	error_code_ = 0;
 	if (groups_.size() == 0) return;
 	solution->reserve(CalcSolutionCapacity());
+	SetGroupOrientations();
 
 	if (std::abs(delta) < 0.5) // ie: offset is insignificant
 	{
@@ -585,7 +1053,19 @@ void ClipperOffset::ExecuteInternal(double delta)
 		for (const Group& group : groups_) sol_size += group.paths_in.size();
 		solution->reserve(sol_size);
 		for (const Group& group : groups_)
-			copy(group.paths_in.begin(), group.paths_in.end(), back_inserter(*solution));
+		{
+			// an open path is only as wide as its delta, so an insignificant delta leaves nothing
+			if (group.end_type != EndType::Polygon) continue;
+
+			for (size_t i = 0; i < group.paths_in.size(); ++i)
+			{
+				if (group.IsStray(i)) continue;
+
+				solution->push_back(group.paths_in[i]);
+
+				if (group.is_reversed) std::reverse(solution->back().begin(), solution->back().end());
+			}
+		}
 	}
 	else
 	{
@@ -606,33 +1086,16 @@ void ClipperOffset::ExecuteInternal(double delta)
 
 	if (!solution->size()) return;
 
-	bool paths_reversed = CheckReverseOrientation();
 	//clean up self-intersections ...
 	Clipper64 c;
-	c.PreserveCollinear(preserve_collinear_);
-	//the solution should retain the orientation of the input
-	c.ReverseSolution(reverse_solution_ != paths_reversed);
-#ifdef USINGZ
-	auto fp = std::bind(&ClipperOffset::ZCB, this, std::placeholders::_1,
-		std::placeholders::_2, std::placeholders::_3,
-		std::placeholders::_4, std::placeholders::_5);
-	c.SetZCallback(fp);
-#endif
+	InitClipper(c);
+	c.ReverseSolution(reverse_solution_);
 	c.AddSubject(*solution);
+	// outers are wound positively, whatever the orientation of the input
 	if (solution_tree)
-	{
-		if (paths_reversed)
-			c.Execute(ClipType::Union, FillRule::Negative, *solution_tree);
-		else
-			c.Execute(ClipType::Union, FillRule::Positive, *solution_tree);
-	}
+		c.Execute(ClipType::Union, FillRule::Positive, *solution_tree);
 	else
-	{
-		if (paths_reversed)
-			c.Execute(ClipType::Union, FillRule::Negative, *solution);
-		else
-			c.Execute(ClipType::Union, FillRule::Positive, *solution);
-	}
+		c.Execute(ClipType::Union, FillRule::Positive, *solution);
 }
 
 void ClipperOffset::Execute(double delta, Paths64& paths64)
