@@ -10,6 +10,7 @@
 #include "clipper2/clipper.engine.h"
 #include "clipper2/clipper.h"
 #include <stdexcept>
+#include <type_traits>
 
 CLIPPER2_NO_FP_CONTRACT
 
@@ -267,46 +268,19 @@ namespace Clipper2Lib {
     return cnt;
   }
 
-  inline OutPt* DuplicateOp(OutPt* op, bool insert_after)
-  {
-    OutPt* result = new OutPt(op->pt, op->outrec);
-    if (insert_after)
-    {
-      result->next = op->next;
-      result->next->prev = result;
-      result->prev = op;
-      op->next = result;
-    }
-    else
-    {
-      result->prev = op->prev;
-      result->prev->next = result;
-      result->next = op;
-      op->prev = result;
-    }
-    return result;
-  }
+  // OutPts belong to the clipper's arena, so disposing of them only unlinks them
 
   inline OutPt* DisposeOutPt(OutPt* op)
   {
     OutPt* result = op->next;
     op->prev->next = op->next;
     op->next->prev = op->prev;
-    delete op;
     return result;
   }
 
 
   inline void DisposeOutPts(OutRec* outrec)
   {
-    OutPt* op = outrec->pts;
-    op->prev->next = nullptr;
-    while (op)
-    {
-      OutPt* tmp = op;
-      op = op->next;
-      delete tmp;
-    };
     outrec->pts = nullptr;
   }
 
@@ -736,32 +710,65 @@ namespace Clipper2Lib {
   }
 
   //------------------------------------------------------------------------------
+  // Arena methods ...
+  //------------------------------------------------------------------------------
+
+  // Tiny operations are fastest with a small first chunk. Chunks then double up
+  // to a limit that keeps them below the size at which malloc implementations
+  // typically map pages directly.
+  constexpr size_t first_arena_chunk_size = 512;
+  constexpr size_t max_arena_chunk_size = 64 * 1024;
+
+  void Arena::AddChunk(size_t min_free_size)
+  {
+    // the header is padded so payloads have the same alignment as operator new
+    constexpr size_t header_size =
+      (sizeof(Chunk) + alignof(std::max_align_t) - 1) & ~(alignof(std::max_align_t) - 1);
+    size_t chunk_size = chunks_ ?
+      std::min(2 * chunks_->size, max_arena_chunk_size) : first_arena_chunk_size;
+    chunk_size = std::max(chunk_size, header_size + min_free_size);
+    char* mem = static_cast<char*>(::operator new(chunk_size));
+    chunks_ = new (mem) Chunk{ chunks_, chunk_size };
+    front_ = mem + header_size;
+    back_ = mem + chunk_size;
+  }
+
+  void Arena::Release()
+  {
+    while (chunks_)
+    {
+      Chunk* prev = chunks_->prev;
+      ::operator delete(chunks_);
+      chunks_ = prev;
+    }
+
+    front_ = nullptr;
+    back_ = nullptr;
+  }
+
+  //------------------------------------------------------------------------------
   // ClipperBase methods ...
   //------------------------------------------------------------------------------
+
+  // the arena doesn't run destructors, DisposeAllOutRecs destroys the OutRecs itself
+  static_assert(std::is_trivially_destructible<OutPt>::value &&
+    std::is_trivially_destructible<Active>::value, "arena objects must be trivially destructible");
 
   ClipperBase::~ClipperBase()
   {
     Clear();
   }
 
-  void ClipperBase::DeleteEdges(Active*& e)
-  {
-    while (e)
-    {
-      Active* e2 = e;
-      e = e->next_in_ael;
-      delete e2;
-    }
-  }
-
   void ClipperBase::CleanUp()
   {
-    DeleteEdges(actives_);
+    actives_ = nullptr;
+    free_actives_ = nullptr;
     scanline_list_ = std::priority_queue<int64_t>();
     intersect_nodes_.clear();
     DisposeAllOutRecs();
     horz_seg_list_.clear();
     horz_join_list_.clear();
+    arena_.Release();
   }
 
 
@@ -891,11 +898,8 @@ namespace Clipper2Lib {
 
   void ClipperBase::DisposeAllOutRecs()
   {
-    for (auto outrec : outrec_list_)
-    {
-      if (outrec->pts) DisposeOutPts(outrec);
-      delete outrec;
-    }
+    for (auto outrec : outrec_list_) outrec->~OutRec();
+
     outrec_list_.resize(0);
   }
 
@@ -1206,6 +1210,17 @@ namespace Clipper2Lib {
   }
 
 
+  inline Active* ClipperBase::NewActive()
+  {
+    if (!free_actives_) return arena_.New<Active>();
+
+    Active* result = free_actives_;
+    free_actives_ = result->jump;
+    *result = Active();
+    return result;
+  }
+
+
   void ClipperBase::InsertLocalMinimaIntoAEL(int64_t bot_y)
   {
     LocalMinima* local_minima;
@@ -1221,7 +1236,7 @@ namespace Clipper2Lib {
       }
       else
       {
-        left_bound = new Active();
+        left_bound = NewActive();
         left_bound->bot = local_minima->vertex->pt;
         left_bound->curr_x = left_bound->bot.x;
         left_bound->wind_dx = -1;
@@ -1237,7 +1252,7 @@ namespace Clipper2Lib {
       }
       else
       {
-        right_bound = new Active();
+        right_bound = NewActive();
         right_bound->bot = local_minima->vertex->pt;
         right_bound->curr_x = right_bound->bot.x;
         right_bound->wind_dx = 1;
@@ -1382,7 +1397,7 @@ namespace Clipper2Lib {
       }
     }
 
-    OutPt* op = new OutPt(pt, outrec);
+    OutPt* op = NewOutPt(pt, outrec);
     outrec->pts = op;
     return op;
   }
@@ -1493,7 +1508,9 @@ namespace Clipper2Lib {
 
   OutRec* ClipperBase::NewOutRec()
   {
-    OutRec* result = new OutRec();
+    // OutRecs come from the back of the arena so they stay together rather
+    // than being scattered among OutPts, which measured faster on large inputs
+    OutRec* result = arena_.NewAtBack<OutRec>();
     result->idx = outrec_list_.size();
     outrec_list_.emplace_back(result);
     result->pts = nullptr;
@@ -1501,6 +1518,33 @@ namespace Clipper2Lib {
     result->polypath = nullptr;
     result->is_open = false;
     result->splits = nullptr;
+    return result;
+  }
+
+
+  inline OutPt* ClipperBase::NewOutPt(const Point64& pt, OutRec* outrec)
+  {
+    return arena_.New<OutPt>(pt, outrec);
+  }
+
+
+  inline OutPt* ClipperBase::DuplicateOp(OutPt* op, bool insert_after)
+  {
+    OutPt* result = NewOutPt(op->pt, op->outrec);
+    if (insert_after)
+    {
+      result->next = op->next;
+      result->next->prev = result;
+      result->prev = op;
+      op->next = result;
+    }
+    else
+    {
+      result->prev = op->prev;
+      result->prev->next = result;
+      result->next = op;
+      op->prev = result;
+    }
     return result;
   }
 
@@ -1524,7 +1568,7 @@ namespace Clipper2Lib {
     else if (pt == op_back->pt)
       return op_back;
 
-    new_op = new OutPt(pt, outrec);
+    new_op = NewOutPt(pt, outrec);
     op_back->prev = new_op;
     new_op->prev = op_front;
     new_op->next = op_back;
@@ -1606,7 +1650,7 @@ namespace Clipper2Lib {
     }
     else
     {
-      OutPt* newOp2 = new OutPt(ip, prevOp->outrec);
+      OutPt* newOp2 = NewOutPt(ip, prevOp->outrec);
       newOp2->prev = prevOp;
       newOp2->next = nextNextOp;
       nextNextOp->prev = newOp2;
@@ -1626,7 +1670,7 @@ namespace Clipper2Lib {
 
       splitOp->outrec = newOr;
       splitOp->next->outrec = newOr;
-      OutPt* newOp = new OutPt(ip, newOr);
+      OutPt* newOp = NewOutPt(ip, newOr);
       newOp->prev = splitOp->next;
       newOp->next = splitOp;
       newOr->pts = newOp;
@@ -1646,11 +1690,6 @@ namespace Clipper2Lib {
           outrec->splits->emplace_back(newOr);
         }
       }
-    }
-    else
-    {
-      delete splitOp->next;
-      delete splitOp;
     }
   }
 
@@ -1711,7 +1750,7 @@ namespace Clipper2Lib {
 
     e.outrec = outrec;
 
-    OutPt* op = new OutPt(pt, outrec);
+    OutPt* op = NewOutPt(pt, outrec);
     outrec->pts = op;
     return op;
   }
@@ -2129,7 +2168,11 @@ namespace Clipper2Lib {
     else
       actives_ = next;
     if (next) next->prev_in_ael = prev;
-    delete& e;
+    // cleared so that a repeat call still sees the edge as deleted
+    e.prev_in_ael = nullptr;
+    e.next_in_ael = nullptr;
+    e.jump = free_actives_;
+    free_actives_ = &e;
   }
 
 

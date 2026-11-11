@@ -14,6 +14,9 @@
 #include <queue>
 #include <functional>
 #include <memory>
+#include <cstddef>
+#include <new>
+#include <utility>
 
 namespace Clipper2Lib {
 
@@ -175,6 +178,76 @@ namespace Clipper2Lib {
 	typedef std::vector<LocalMinima_ptr> LocalMinimaList;
 	typedef std::vector<IntersectNode> IntersectNodeList;
 
+	// Arena -------------------------------------------------------------------
+
+	//A chunked bump allocator for the objects created while clipping. Objects
+	//never move once allocated, and Release frees them all at once without
+	//running their destructors. Objects can be taken from either end of the
+	//current chunk's free space, which keeps two kinds of object apart.
+	class Arena {
+	private:
+		struct Chunk { Chunk* prev; size_t size; };
+		Chunk* chunks_ = nullptr;
+		char* front_ = nullptr;
+		char* back_ = nullptr;
+		void AddChunk(size_t min_free_size);
+
+		void* AllocateAtFront(size_t size, size_t align)
+		{
+			uintptr_t p = (reinterpret_cast<uintptr_t>(front_) + align - 1) & ~uintptr_t(align - 1);
+
+			if (p + size <= reinterpret_cast<uintptr_t>(back_))
+			{
+				front_ = reinterpret_cast<char*>(p + size);
+				return reinterpret_cast<void*>(p);
+			}
+
+			AddChunk(size + align);
+			return AllocateAtFront(size, align);
+		}
+
+		void* AllocateAtBack(size_t size, size_t align)
+		{
+			uintptr_t front = reinterpret_cast<uintptr_t>(front_);
+			uintptr_t back = reinterpret_cast<uintptr_t>(back_);
+
+			if (back - front >= size)
+			{
+				uintptr_t p = (back - size) & ~uintptr_t(align - 1);
+
+				if (p >= front)
+				{
+					back_ = reinterpret_cast<char*>(p);
+					return reinterpret_cast<void*>(p);
+				}
+			}
+
+			AddChunk(size + align);
+			return AllocateAtBack(size, align);
+		}
+	public:
+		Arena() = default;
+		Arena(const Arena&) = delete;
+		Arena& operator=(const Arena&) = delete;
+		~Arena() { Release(); }
+
+		template <typename T, typename... Args>
+		T* New(Args&&... args)
+		{
+			static_assert(alignof(T) <= alignof(std::max_align_t), "over-aligned type");
+			return new (AllocateAtFront(sizeof(T), alignof(T))) T(std::forward<Args>(args)...);
+		}
+
+		template <typename T, typename... Args>
+		T* NewAtBack(Args&&... args)
+		{
+			static_assert(alignof(T) <= alignof(std::max_align_t), "over-aligned type");
+			return new (AllocateAtBack(sizeof(T), alignof(T))) T(std::forward<Args>(args)...);
+		}
+
+		void Release();
+	};
+
 	// ReuseableDataContainer64 ------------------------------------------------
 
 	class ReuseableDataContainer64 {
@@ -204,6 +277,10 @@ namespace Clipper2Lib {
 		bool using_polytree_ = false;
 		Active* actives_ = nullptr;
 		Active *sel_ = nullptr;
+		//OutPts, OutRecs and Actives live here until CleanUp. Deleted Actives
+		//are recycled through free_actives_, chained by their jump pointers.
+		Arena arena_;
+		Active* free_actives_ = nullptr;
 		LocalMinimaList minima_list_;		//pointers in case of memory reallocs
 		LocalMinimaList::iterator current_locmin_iter_;
 		std::vector<Vertex*> vertex_lists_;
@@ -220,7 +297,9 @@ namespace Clipper2Lib {
 		inline bool PopLocalMinima(int64_t y, LocalMinima*& local_minima);
 		void DisposeAllOutRecs();
 		void DisposeVerticesAndLocalMinima();
-		void DeleteEdges(Active*& e);
+		inline Active* NewActive();
+		inline OutPt* NewOutPt(const Point64& pt, OutRec* outrec);
+		inline OutPt* DuplicateOp(OutPt* op, bool insert_after);
 		inline void AddLocMin(Vertex &vert, PathType polytype, bool is_open);
 		bool IsContributingClosed(const Active &e) const;
 		inline bool IsContributingOpen(const Active &e) const;

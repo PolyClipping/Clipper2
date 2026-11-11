@@ -339,3 +339,51 @@ TEST(Clipper2Tests, TestIntersectPointIsNotFused)
   EXPECT_EQ(ip, Point64(-100, 66));
 }
 #endif
+
+TEST(Clipper2Tests, TestReusedClipperMatchesFreshClipper)
+{
+  // a clipper's working objects are released after each Execute, so
+  // executing again on the same clipper must give the same results
+  std::ifstream ifs("Polygons.txt");
+  ASSERT_TRUE(ifs.good());
+
+  for (int test_number = 1; test_number <= 100; ++test_number)
+  {
+    Clipper2Lib::Paths64 subject, subject_open, clip;
+    Clipper2Lib::ClipType ct;
+    Clipper2Lib::FillRule fr;
+    int64_t stored_area, stored_count;
+
+    if (!LoadTestNum(ifs, test_number,
+      subject, subject_open, clip, stored_area, stored_count, ct, fr)) break;
+
+    Clipper2Lib::Clipper64 reused;
+    reused.AddSubject(subject);
+    reused.AddOpenSubject(subject_open);
+    reused.AddClip(clip);
+
+    for (int i = 1; i <= 4; ++i)
+    {
+      const auto clip_type = static_cast<Clipper2Lib::ClipType>(i);
+      Clipper2Lib::Clipper64 fresh, fresh_tree;
+      fresh.AddSubject(subject);
+      fresh.AddOpenSubject(subject_open);
+      fresh.AddClip(clip);
+      fresh_tree.AddSubject(subject);
+      fresh_tree.AddOpenSubject(subject_open);
+      fresh_tree.AddClip(clip);
+
+      Clipper2Lib::Paths64 closed, open, fresh_closed, fresh_open;
+      reused.Execute(clip_type, fr, closed, open);
+      fresh.Execute(clip_type, fr, fresh_closed, fresh_open);
+      EXPECT_EQ(closed, fresh_closed) << " in test " << test_number;
+      EXPECT_EQ(open, fresh_open) << " in test " << test_number;
+
+      Clipper2Lib::PolyTree64 tree, fresh_tree_result;
+      reused.Execute(clip_type, fr, tree, open);
+      fresh_tree.Execute(clip_type, fr, fresh_tree_result, fresh_open);
+      EXPECT_EQ(PolyTreeToPaths64(tree), PolyTreeToPaths64(fresh_tree_result)) << " in test " << test_number;
+      EXPECT_EQ(open, fresh_open) << " in test " << test_number;
+    }
+  }
+}
